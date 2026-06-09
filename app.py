@@ -13,15 +13,20 @@ import os
 import streamlit as st
 import uuid
 from datetime import datetime, date, timedelta
-from dotenv import load_dotenv
 from supabase import create_client, Client
 
-load_dotenv()
+# Load .env locally; skip gracefully on Streamlit Cloud where it's not installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── Supabase client ─────────────────────────────────────────────────────────────
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+# Works with both local .env files AND Streamlit Cloud secrets
+SUPABASE_URL = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
 
 CATEGORIES = [
     "Electronics", "Wallet / Purse", "Keys", "Clothing",
