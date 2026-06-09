@@ -1,12 +1,6 @@
 """
 Lost & Found Hub — a Streamlit community board for posting and finding lost items.
 Backed by Supabase (Postgres + Storage).
-
-Run:
-    1. Copy .env.example to .env and fill in your Supabase credentials
-    2. Run setup.sql in your Supabase SQL Editor
-    3. pip install -r requirements.txt
-    4. streamlit run app.py
 """
 
 import os
@@ -15,7 +9,7 @@ import uuid
 from datetime import datetime, date, timedelta
 from supabase import create_client, Client
 
-# Load .env locally; skip gracefully on Streamlit Cloud where it's not installed
+# Load .env locally; skip gracefully on Streamlit Cloud
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -24,7 +18,6 @@ except ImportError:
 
 # ── Supabase client ─────────────────────────────────────────────────────────────
 
-# Works with both local .env files AND Streamlit Cloud secrets
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
 
@@ -41,11 +34,10 @@ PAGE_ICONS = {"Home": "🏠", "Report Lost": "🔴", "Report Found": "🟢",
 
 @st.cache_resource
 def get_supabase() -> Client:
-    """Create a single Supabase client cached across reruns."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         st.error(
             "Missing Supabase credentials. "
-            "Set SUPABASE_URL and SUPABASE_KEY in your .env file."
+            "Set SUPABASE_URL and SUPABASE_KEY in your .env file or Streamlit Secrets."
         )
         st.stop()
     return create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -120,7 +112,6 @@ def insert_item(sb: Client, data: dict) -> str:
 
 
 def save_photo(sb: Client, uploaded_file) -> str | None:
-    """Upload a photo to Supabase Storage and return the storage path."""
     if uploaded_file is None:
         return None
     photo_id = uuid.uuid4().hex[:16]
@@ -141,20 +132,18 @@ def save_photo(sb: Client, uploaded_file) -> str | None:
 
 
 def get_photo_url(sb: Client, photo_id: str) -> str | None:
-    """Get the public URL for a photo in Supabase Storage."""
     if not photo_id:
         return None
     return sb.storage.from_("photos").get_public_url(photo_id)
 
 
 def delete_photo(sb: Client, photo_id: str):
-    """Remove a photo from Supabase Storage."""
     if not photo_id:
         return
     try:
         sb.storage.from_("photos").remove([photo_id])
     except Exception:
-        pass  # photo may already be gone
+        pass
 
 
 def search_items(sb: Client, item_type: str, query: str = "",
@@ -428,7 +417,6 @@ def render_breadcrumb(*parts):
 
 def show_photo(sb: Client, photo_id: str | None, width: int | None = None,
                use_container_width: bool = False):
-    """Display a photo from Supabase Storage, or a placeholder."""
     if photo_id:
         url = get_photo_url(sb, photo_id)
         if url:
@@ -479,7 +467,6 @@ def page_landing(sb: Client):
             st.session_state["show_login"] = True
             st.rerun()
 
-    # ── Dev login form ──────────────────────────────────────────────────────
     if st.session_state.get("show_login"):
         st.markdown("---")
         st.markdown("### 🔐 Dev Login")
@@ -856,7 +843,6 @@ def page_detail(sb: Client):
             parts.append(f"**Phone:** {row['contact_phone']}")
         st.markdown(" &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
 
-    # ── Actions: dev-only ───────────────────────────────────────────────────
     st.markdown("---")
 
     if is_dev():
@@ -879,7 +865,6 @@ def page_detail(sb: Client):
         else:
             st.caption("🔒 This item has been marked as resolved by a dev.")
 
-    # Potential matches
     matches = get_potential_matches(sb, row)
     if matches:
         opposite = "Found" if row["item_type"] == "lost" else "Lost"
@@ -904,7 +889,6 @@ def main():
 
     sb = get_supabase()
 
-    # Auth gate
     if not is_logged_in():
         page_landing(sb)
         return
