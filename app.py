@@ -5,10 +5,8 @@ Run:  streamlit run app.py
 
 import streamlit as st
 import sqlite3
-import base64
 import uuid
-import io
-import os
+import hashlib
 from datetime import datetime, date, timedelta
 from pathlib import Path
 
@@ -23,6 +21,10 @@ CATEGORIES = [
     "Jewelry", "Bag / Backpack", "Documents / ID",
     "Pet", "Glasses / Sunglasses", "Umbrella", "Other",
 ]
+
+PAGES = ["Home", "Report Lost", "Report Found", "Browse Lost", "Browse Found"]
+PAGE_ICONS = {"Home": "🏠", "Report Lost": "🔴", "Report Found": "🟢",
+              "Browse Lost": "📋", "Browse Found": "📋", "Detail": "📄"}
 
 
 def get_db():
@@ -46,9 +48,60 @@ def get_db():
             status       TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS dev_users (
+            id    TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            name  TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
     return conn
 
+
+# ── Auth helpers ────────────────────────────────────────────────────────────────
+
+def get_dev_emails(conn) -> list[str]:
+    rows = conn.execute("SELECT email FROM dev_users ORDER BY created_at").fetchall()
+    return [r["email"] for r in rows]
+
+
+def is_dev_email(conn, email: str) -> bool:
+    row = conn.execute(
+        "SELECT id FROM dev_users WHERE LOWER(email) = LOWER(?)", (email.strip(),)
+    ).fetchone()
+    return row is not None
+
+
+def add_dev_user(conn, email: str, name: str = "") -> str:
+    uid = uuid.uuid4().hex[:12]
+    conn.execute(
+        "INSERT INTO dev_users (id, email, name, created_at) VALUES (?,?,?,?)",
+        (uid, email.strip().lower(), name.strip(), datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    return uid
+
+
+def dev_count(conn) -> int:
+    return conn.execute("SELECT COUNT(*) as c FROM dev_users").fetchone()["c"]
+
+
+def is_logged_in() -> bool:
+    return st.session_state.get("auth_role") in ("guest", "dev")
+
+
+def is_dev() -> bool:
+    return st.session_state.get("auth_role") == "dev"
+
+
+def logout():
+    for key in ["auth_role", "auth_email", "auth_name", "page", "detail_id"]:
+        st.session_state.pop(key, None)
+
+
+# ── Item CRUD ───────────────────────────────────────────────────────────────────
 
 def insert_item(conn, data: dict) -> str:
     item_id = uuid.uuid4().hex[:12]
@@ -143,7 +196,6 @@ def delete_item(conn, item_id: str):
 
 
 def get_potential_matches(conn, item):
-    """Find items of the opposite type sharing category or keywords."""
     opposite = "found" if item["item_type"] == "lost" else "lost"
     matches = []
 
@@ -186,6 +238,18 @@ def count_stats(conn):
     for r in rows:
         stats[f"{r['item_type']}_{r['status']}"] = r["cnt"]
     return stats
+
+
+# ── Navigation helpers ──────────────────────────────────────────────────────────
+
+def navigate_to(page: str, **kwargs):
+    st.session_state["page"] = page
+    for k, v in kwargs.items():
+        st.session_state[k] = v
+
+
+def go_to_detail(item_id: str):
+    navigate_to("Detail", detail_id=item_id)
 
 
 # ── UI Helpers ──────────────────────────────────────────────────────────────────
@@ -249,6 +313,62 @@ def apply_styles():
         padding-bottom: .35rem;
         margin-bottom: .8rem;
     }
+
+    .breadcrumb {
+        font-size: .85rem;
+        color: #888;
+        margin-bottom: .5rem;
+    }
+    .breadcrumb span { color: #bbb; margin: 0 .35rem; }
+
+    /* ── Landing page ────────────────────────── */
+    .landing-hero {
+        text-align: center;
+        padding: 3rem 1rem 2rem;
+    }
+    .landing-hero h1 {
+        font-size: 2.8rem;
+        margin-bottom: .3rem;
+    }
+    .landing-hero .subtitle {
+        font-size: 1.15rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
+    .landing-card {
+        background: #fff;
+        border: 2px solid #e2e5eb;
+        border-radius: 16px;
+        padding: 2rem 1.5rem;
+        text-align: center;
+        transition: border-color .15s, box-shadow .15s;
+    }
+    .landing-card:hover {
+        border-color: #a0b4d0;
+        box-shadow: 0 6px 24px rgba(0,0,0,.07);
+    }
+    .landing-card .card-icon {
+        font-size: 2.5rem;
+        margin-bottom: .6rem;
+    }
+    .landing-card h3 { margin: .3rem 0; }
+    .landing-card p {
+        font-size: .9rem;
+        color: #777;
+        margin-bottom: 1rem;
+    }
+
+    /* ── Role badge in sidebar ───────────────── */
+    .role-badge {
+        display: inline-block;
+        padding: .2rem .6rem;
+        border-radius: 6px;
+        font-size: .75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    .role-dev  { background: #e8eaf6; color: #3949ab; }
+    .role-guest { background: #f5f5f5; color: #888; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -276,12 +396,203 @@ def item_card_html(row) -> str:
     """
 
 
+def render_breadcrumb(*parts):
+    crumbs = []
+    for label, page in parts[:-1]:
+        crumbs.append(f"{label}")
+    crumbs.append(f"**{parts[-1][0]}**")
+    sep = ' <span>›</span> '
+    st.markdown(f'<div class="breadcrumb">{sep.join(crumbs)}</div>', unsafe_allow_html=True)
+
+
+# ── Landing / Auth Page ─────────────────────────────────────────────────────────
+
+def page_landing(conn):
+    st.markdown("""
+    <div class="landing-hero">
+        <h1>🔎 Lost & Found Hub</h1>
+        <div class="subtitle">A community board to post and find lost items</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_guest, col_dev = st.columns(2, gap="large")
+
+    with col_guest:
+        st.markdown("""
+        <div class="landing-card">
+            <div class="card-icon">👤</div>
+            <h3>Guest Access</h3>
+            <p>Browse lost & found items and post your own listings. No account needed.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Continue as Guest", use_container_width=True, type="secondary"):
+            st.session_state["auth_role"] = "guest"
+            st.session_state["page"] = "Home"
+            st.rerun()
+
+    with col_dev:
+        st.markdown("""
+        <div class="landing-card">
+            <div class="card-icon">🔐</div>
+            <h3>Dev Login</h3>
+            <p>Manage the board: mark items as found, reunited, reopen or delete posts.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        if st.button("Log in with Email", use_container_width=True, type="primary"):
+            st.session_state["show_login"] = True
+            st.rerun()
+
+    # ── Dev login form ──────────────────────────────────────────────────────
+    if st.session_state.get("show_login"):
+        st.markdown("---")
+        st.markdown("### 🔐 Dev Login")
+
+        has_devs = dev_count(conn) > 0
+
+        if has_devs:
+            st.caption("Enter your registered dev email to log in.")
+            with st.form("login_form"):
+                email = st.text_input("Email address", placeholder="you@example.com")
+                submitted = st.form_submit_button("Log In", use_container_width=True)
+
+            if submitted:
+                if not email.strip():
+                    st.error("Please enter an email address.")
+                elif is_dev_email(conn, email):
+                    st.session_state["auth_role"] = "dev"
+                    st.session_state["auth_email"] = email.strip().lower()
+                    st.session_state["page"] = "Home"
+                    st.session_state.pop("show_login", None)
+                    st.rerun()
+                else:
+                    st.error("This email is not registered as a dev account. Contact an existing dev to be added.")
+        else:
+            st.info("No dev accounts exist yet. Create the first one below to become the admin.")
+            with st.form("setup_form"):
+                name = st.text_input("Your name", placeholder="Jane Smith")
+                email = st.text_input("Email address", placeholder="you@example.com")
+                confirm = st.text_input("Confirm email", placeholder="you@example.com")
+                submitted = st.form_submit_button("Create Dev Account", use_container_width=True)
+
+            if submitted:
+                if not email.strip():
+                    st.error("Please enter an email address.")
+                elif email.strip().lower() != confirm.strip().lower():
+                    st.error("Emails do not match.")
+                elif "@" not in email or "." not in email.split("@")[-1]:
+                    st.error("Please enter a valid email address.")
+                else:
+                    add_dev_user(conn, email, name)
+                    st.session_state["auth_role"] = "dev"
+                    st.session_state["auth_email"] = email.strip().lower()
+                    st.session_state["auth_name"] = name.strip()
+                    st.session_state["page"] = "Home"
+                    st.session_state.pop("show_login", None)
+                    st.success("Dev account created! You are now logged in.")
+                    st.rerun()
+
+        if st.button("← Back"):
+            st.session_state.pop("show_login", None)
+            st.rerun()
+
+
+# ── Sidebar ─────────────────────────────────────────────────────────────────────
+
+def render_sidebar(conn):
+    st.sidebar.markdown("# 🔎 Lost & Found Hub")
+
+    # Show role badge and user info
+    if is_dev():
+        email = st.session_state.get("auth_email", "")
+        st.sidebar.markdown(
+            f'<span class="role-badge role-dev">🔐 Dev</span> &nbsp; {email}',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.sidebar.markdown(
+            '<span class="role-badge role-guest">👤 Guest</span>',
+            unsafe_allow_html=True,
+        )
+
+    st.sidebar.markdown("---")
+
+    current = st.session_state.get("page", "Home")
+
+    for page_name in PAGES:
+        icon = PAGE_ICONS[page_name]
+        is_active = (current == page_name)
+        label = f"{icon}  {page_name}"
+        st.sidebar.button(
+            label,
+            key=f"nav_{page_name}",
+            on_click=navigate_to,
+            args=(page_name,),
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        )
+
+    # Dev-only: manage dev accounts
+    if is_dev():
+        st.sidebar.markdown("---")
+        st.sidebar.markdown("##### Dev Tools")
+        with st.sidebar.expander("Manage Dev Accounts"):
+            existing = get_dev_emails(conn)
+            for em in existing:
+                st.sidebar.text(f"• {em}")
+            st.sidebar.markdown("")
+            new_email = st.sidebar.text_input("Add dev email", key="add_dev_email",
+                                               placeholder="new-dev@example.com")
+            if st.sidebar.button("Add Dev", key="btn_add_dev"):
+                if new_email.strip() and "@" in new_email:
+                    if is_dev_email(conn, new_email):
+                        st.sidebar.warning("Already registered.")
+                    else:
+                        add_dev_user(conn, new_email)
+                        st.sidebar.success(f"Added {new_email.strip().lower()}")
+                        st.rerun()
+                else:
+                    st.sidebar.error("Enter a valid email.")
+
+    st.sidebar.markdown("---")
+
+    # Log out / switch
+    if st.sidebar.button("🚪 Log Out", use_container_width=True):
+        logout()
+        st.rerun()
+
+    if not is_dev():
+        st.sidebar.caption("Tip: Log in as a dev to manage item statuses.")
+    else:
+        st.sidebar.caption("You can mark items as resolved, reopen, or delete posts.")
+
+
 # ── Pages ───────────────────────────────────────────────────────────────────────
 
 def page_home(conn):
     st.markdown("## 🏠 Dashboard")
-    stats = count_stats(conn)
 
+    # Quick-action buttons
+    qa1, qa2, qa3, qa4 = st.columns(4)
+    with qa1:
+        if st.button("🔴 Report Lost", use_container_width=True, key="qa_rl"):
+            navigate_to("Report Lost")
+            st.rerun()
+    with qa2:
+        if st.button("🟢 Report Found", use_container_width=True, key="qa_rf"):
+            navigate_to("Report Found")
+            st.rerun()
+    with qa3:
+        if st.button("📋 Browse Lost", use_container_width=True, key="qa_bl"):
+            navigate_to("Browse Lost")
+            st.rerun()
+    with qa4:
+        if st.button("📋 Browse Found", use_container_width=True, key="qa_bf"):
+            navigate_to("Browse Found")
+            st.rerun()
+
+    st.markdown("")
+
+    stats = count_stats(conn)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="stat-card stat-lost">
@@ -312,9 +623,8 @@ def page_home(conn):
         if lost:
             for row in lost:
                 st.markdown(item_card_html(row), unsafe_allow_html=True)
-                if st.button("View details", key=f"home_l_{row['id']}"):
-                    st.session_state["detail_id"] = row["id"]
-                    st.session_state["page"] = "Detail"
+                if st.button("View details", key=f"home_l_{row['id']}",
+                             on_click=go_to_detail, args=(row["id"],)):
                     st.rerun()
         else:
             st.info("No lost items posted yet.")
@@ -325,9 +635,8 @@ def page_home(conn):
         if found:
             for row in found:
                 st.markdown(item_card_html(row), unsafe_allow_html=True)
-                if st.button("View details", key=f"home_f_{row['id']}"):
-                    st.session_state["detail_id"] = row["id"]
-                    st.session_state["page"] = "Detail"
+                if st.button("View details", key=f"home_f_{row['id']}",
+                             on_click=go_to_detail, args=(row["id"],)):
                     st.rerun()
         else:
             st.info("No found items posted yet.")
@@ -336,6 +645,8 @@ def page_home(conn):
 def page_post(conn, item_type: str):
     emoji = "🔴" if item_type == "lost" else "🟢"
     verb = "Lost" if item_type == "lost" else "Found"
+
+    render_breadcrumb(("Home", "Home"), (f"Report {verb}", None))
     st.markdown(f"## {emoji} Report a {verb} Item")
     st.caption(f"Fill in the details below to post a {verb.lower()} item to the community board.")
 
@@ -390,24 +701,41 @@ def page_post(conn, item_type: str):
         st.success(f"Item posted! (ID: {item_id})")
         st.balloons()
 
+        vc1, vc2, _ = st.columns([1, 1, 2])
+        with vc1:
+            if st.button("📄 View your post"):
+                go_to_detail(item_id)
+                st.rerun()
+        with vc2:
+            if st.button(f"➕ Post another {verb.lower()} item"):
+                st.rerun()
+
 
 def page_browse(conn, item_type: str):
     emoji = "🔴" if item_type == "lost" else "🟢"
     verb = "Lost" if item_type == "lost" else "Found"
+
+    render_breadcrumb(("Home", "Home"), (f"Browse {verb}", None))
     st.markdown(f"## {emoji} Browse {verb} Items")
 
     fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
     with fc1:
-        query = st.text_input("🔍 Search", placeholder="Keyword, location...", label_visibility="collapsed")
+        query = st.text_input("🔍 Search", placeholder="Keyword, location...",
+                               label_visibility="collapsed")
     with fc2:
-        cat_filter = st.selectbox("Category", ["All"] + CATEGORIES, label_visibility="collapsed")
+        cat_filter = st.selectbox("Category", ["All"] + CATEGORIES,
+                                   label_visibility="collapsed")
     with fc3:
-        time_filter = st.selectbox("Time range", ["All time", "Last 7 days", "Last 30 days", "Last 90 days"], label_visibility="collapsed")
+        time_filter = st.selectbox("Time range",
+                                    ["All time", "Last 7 days", "Last 30 days", "Last 90 days"],
+                                    label_visibility="collapsed")
     with fc4:
-        status_filter = st.selectbox("Status", ["open", "resolved"], label_visibility="collapsed")
+        status_filter = st.selectbox("Status", ["open", "resolved"],
+                                      label_visibility="collapsed")
 
     days_map = {"All time": 0, "Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
-    results = search_items(conn, item_type, query, cat_filter, status_filter, days_map[time_filter])
+    results = search_items(conn, item_type, query, cat_filter,
+                           status_filter, days_map[time_filter])
 
     st.caption(f"{len(results)} result{'s' if len(results) != 1 else ''}")
 
@@ -424,9 +752,8 @@ def page_browse(conn, item_type: str):
             if photo_bytes:
                 st.image(photo_bytes, width=200)
 
-            if st.button("View details →", key=f"browse_{item_type}_{row['id']}"):
-                st.session_state["detail_id"] = row["id"]
-                st.session_state["page"] = "Detail"
+            if st.button("View details →", key=f"browse_{item_type}_{row['id']}",
+                         on_click=go_to_detail, args=(row["id"],)):
                 st.rerun()
             st.markdown("")
 
@@ -434,22 +761,31 @@ def page_browse(conn, item_type: str):
 def page_detail(conn):
     item_id = st.session_state.get("detail_id")
     if not item_id:
-        st.warning("No item selected. Go browse items first.")
+        st.warning("No item selected.")
+        if st.button("← Go to Home"):
+            navigate_to("Home")
+            st.rerun()
         return
 
     row = get_item(conn, item_id)
     if not row:
         st.error("Item not found (it may have been deleted).")
+        if st.button("← Go to Home"):
+            navigate_to("Home")
+            st.rerun()
         return
 
     verb = "Lost" if row["item_type"] == "lost" else "Found"
+    browse_page = f"Browse {verb}"
 
-    if st.button("← Back to browsing"):
-        st.session_state["page"] = f"Browse {verb}"
-        st.session_state.pop("detail_id", None)
+    render_breadcrumb(("Home", "Home"), (f"Browse {verb}", browse_page), (row["title"], None))
+
+    if st.button(f"← Back to {browse_page}"):
+        navigate_to(browse_page)
         st.rerun()
 
-    st.markdown(f"{badge(row['item_type'], row['status'])} &nbsp; `{row['id']}`", unsafe_allow_html=True)
+    st.markdown(f"{badge(row['item_type'], row['status'])} &nbsp; `{row['id']}`",
+                unsafe_allow_html=True)
     st.markdown(f"# {row['title']}")
 
     col_img, col_info = st.columns([1, 2])
@@ -491,25 +827,33 @@ def page_detail(conn):
             parts.append(f"**Phone:** {row['contact_phone']}")
         st.markdown(" &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
 
+    # ── Actions: dev-only for resolve/reopen/delete ─────────────────────────
     st.markdown("---")
-    ac1, ac2, _ = st.columns([1, 1, 3])
-    with ac1:
-        if row["status"] == "open":
-            if st.button("✅ Mark as Resolved"):
-                resolve_item(conn, item_id)
-                st.rerun()
-        else:
-            if st.button("🔄 Reopen"):
-                reopen_item(conn, item_id)
-                st.rerun()
-    with ac2:
-        if st.button("🗑️ Delete Post"):
-            delete_item(conn, item_id)
-            st.success("Post deleted.")
-            st.session_state.pop("detail_id", None)
-            st.session_state["page"] = "Home"
-            st.rerun()
 
+    if is_dev():
+        ac1, ac2, _ = st.columns([1, 1, 3])
+        with ac1:
+            if row["status"] == "open":
+                if st.button("✅ Mark as Resolved"):
+                    resolve_item(conn, item_id)
+                    st.rerun()
+            else:
+                if st.button("🔄 Reopen"):
+                    reopen_item(conn, item_id)
+                    st.rerun()
+        with ac2:
+            if st.button("🗑️ Delete Post"):
+                delete_item(conn, item_id)
+                st.toast("Post deleted.")
+                navigate_to("Home")
+                st.rerun()
+    else:
+        if row["status"] == "open":
+            st.caption("🔒 Only dev accounts can mark items as resolved or delete posts.")
+        else:
+            st.caption("🔒 This item has been marked as resolved by a dev.")
+
+    # Potential matches
     matches = get_potential_matches(conn, row)
     if matches:
         opposite = "Found" if row["item_type"] == "lost" else "Lost"
@@ -517,8 +861,8 @@ def page_detail(conn):
         st.caption("These items share a similar category or keywords.")
         for m in matches:
             st.markdown(item_card_html(m), unsafe_allow_html=True)
-            if st.button("View", key=f"match_{m['id']}"):
-                st.session_state["detail_id"] = m["id"]
+            if st.button("View", key=f"match_{m['id']}",
+                         on_click=go_to_detail, args=(m["id"],)):
                 st.rerun()
 
 
@@ -534,74 +878,34 @@ def main():
 
     conn = get_db()
 
-    # Initialize page state
-    if "page" not in st.session_state:
-        st.session_state["page"] = "Home"
-
-    pages = ["Home", "Report Lost", "Report Found", "Browse Lost", "Browse Found"]
-    icons = ["🏠", "🔴", "🟢", "📋", "📋"]
-
-    # Render detail page first — sidebar should not interfere
-    if st.session_state.get("page") == "Detail":
-        # Show sidebar radio locked to no visible selection to avoid confusion
-        st.sidebar.markdown("# 🔎 Lost & Found Hub")
-        st.sidebar.caption("Community board for lost and found items")
-        st.sidebar.markdown("---")
-        # Sidebar nav still renders so user can escape detail view by clicking a page
-        selected = st.sidebar.radio(
-            "Navigate",
-            pages,
-            index=0,
-            format_func=lambda p: f"{icons[pages.index(p)]}  {p}",
-            label_visibility="collapsed",
-            key="nav_radio",
-        )
-        # If user explicitly clicks a sidebar item, navigate there
-        if st.session_state.get("_last_nav") != selected:
-            st.session_state["_last_nav"] = selected
-            st.session_state["page"] = selected
-            st.session_state.pop("detail_id", None)
-            st.rerun()
-
-        page_detail(conn)
+    # ── Auth gate: show landing page if not logged in ───────────────────────
+    if not is_logged_in():
+        page_landing(conn)
         conn.close()
         return
 
-    # Normal navigation
-    st.sidebar.markdown("# 🔎 Lost & Found Hub")
-    st.sidebar.caption("Community board for lost and found items")
-    st.sidebar.markdown("---")
+    # ── Logged in: show sidebar + routed page ───────────────────────────────
+    if "page" not in st.session_state:
+        st.session_state["page"] = "Home"
+
+    render_sidebar(conn)
 
     current_page = st.session_state["page"]
-    default_idx = pages.index(current_page) if current_page in pages else 0
 
-    selected = st.sidebar.radio(
-        "Navigate",
-        pages,
-        index=default_idx,
-        format_func=lambda p: f"{icons[pages.index(p)]}  {p}",
-        label_visibility="collapsed",
-        key="nav_radio",
-    )
-
-    # Only update page state when user actually changes the sidebar selection
-    if selected != st.session_state["page"]:
-        st.session_state["page"] = selected
-        st.session_state.pop("detail_id", None)
-        st.rerun()
-
-    st.session_state["_last_nav"] = selected
-
-    if selected == "Home":
+    if current_page == "Home":
         page_home(conn)
-    elif selected == "Report Lost":
+    elif current_page == "Report Lost":
         page_post(conn, "lost")
-    elif selected == "Report Found":
+    elif current_page == "Report Found":
         page_post(conn, "found")
-    elif selected == "Browse Lost":
+    elif current_page == "Browse Lost":
         page_browse(conn, "lost")
-    elif selected == "Browse Found":
+    elif current_page == "Browse Found":
         page_browse(conn, "found")
+    elif current_page == "Detail":
+        page_detail(conn)
+    else:
+        page_home(conn)
 
     conn.close()
 
