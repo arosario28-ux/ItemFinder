@@ -147,7 +147,6 @@ def get_potential_matches(conn, item):
     opposite = "found" if item["item_type"] == "lost" else "lost"
     matches = []
 
-    # Same category match
     if item["category"]:
         rows = conn.execute(
             """SELECT * FROM items
@@ -157,7 +156,6 @@ def get_potential_matches(conn, item):
         ).fetchall()
         matches.extend(rows)
 
-    # Keyword overlap from title
     if item["title"]:
         words = [w for w in item["title"].lower().split() if len(w) > 3]
         for word in words[:4]:
@@ -170,7 +168,6 @@ def get_potential_matches(conn, item):
             ).fetchall()
             matches.extend(rows)
 
-    # De-duplicate by id, preserving order
     seen = set()
     unique = []
     for m in matches:
@@ -196,10 +193,8 @@ def count_stats(conn):
 def apply_styles():
     st.markdown("""
     <style>
-    /* ── Global ──────────────────────────────── */
     .block-container { max-width: 960px; }
 
-    /* ── Stat cards ──────────────────────────── */
     .stat-card {
         background: linear-gradient(135deg, #f8f9fc, #eef1f8);
         border-radius: 14px;
@@ -221,7 +216,6 @@ def apply_styles():
     .stat-found .num  { color: #2e8b57; }
     .stat-closed .num { color: #6c7a89; }
 
-    /* ── Item cards ──────────────────────────── */
     .item-card {
         background: #fff;
         border: 1px solid #e2e5eb;
@@ -234,7 +228,6 @@ def apply_styles():
     .item-card h4 { margin: 0 0 .3rem; }
     .item-card .meta { font-size: .82rem; color: #777; }
 
-    /* ── Badges ───────────────────────────────── */
     .badge {
         display: inline-block;
         padding: .15rem .55rem;
@@ -248,7 +241,6 @@ def apply_styles():
     .badge-found  { background: #e8f5e9; color: #27763d; }
     .badge-resolved { background: #eee; color: #888; }
 
-    /* ── Section headers ─────────────────────── */
     .section-head {
         font-size: 1.05rem;
         font-weight: 600;
@@ -404,7 +396,6 @@ def page_browse(conn, item_type: str):
     verb = "Lost" if item_type == "lost" else "Found"
     st.markdown(f"## {emoji} Browse {verb} Items")
 
-    # Filters
     fc1, fc2, fc3, fc4 = st.columns([3, 2, 2, 2])
     with fc1:
         query = st.text_input("🔍 Search", placeholder="Keyword, location...", label_visibility="collapsed")
@@ -424,13 +415,11 @@ def page_browse(conn, item_type: str):
         st.info(f"No {verb.lower()} items match your filters.")
         return
 
-    # Two-column card grid
     cols = st.columns(2)
     for i, row in enumerate(results):
         with cols[i % 2]:
             st.markdown(item_card_html(row), unsafe_allow_html=True)
 
-            # Show thumbnail if photo exists
             photo_bytes = load_photo_bytes(row["photo_id"])
             if photo_bytes:
                 st.image(photo_bytes, width=200)
@@ -439,7 +428,7 @@ def page_browse(conn, item_type: str):
                 st.session_state["detail_id"] = row["id"]
                 st.session_state["page"] = "Detail"
                 st.rerun()
-            st.markdown("")  # spacer
+            st.markdown("")
 
 
 def page_detail(conn):
@@ -455,9 +444,9 @@ def page_detail(conn):
 
     verb = "Lost" if row["item_type"] == "lost" else "Found"
 
-    # Back button
     if st.button("← Back to browsing"):
         st.session_state["page"] = f"Browse {verb}"
+        st.session_state.pop("detail_id", None)
         st.rerun()
 
     st.markdown(f"{badge(row['item_type'], row['status'])} &nbsp; `{row['id']}`", unsafe_allow_html=True)
@@ -490,7 +479,6 @@ def page_detail(conn):
         st.markdown("### Description")
         st.markdown(row["description"])
 
-    # Contact info
     has_contact = row["contact_name"] or row["contact_email"] or row["contact_phone"]
     if has_contact:
         st.markdown("### Contact")
@@ -503,7 +491,6 @@ def page_detail(conn):
             parts.append(f"**Phone:** {row['contact_phone']}")
         st.markdown(" &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
 
-    # Actions
     st.markdown("---")
     ac1, ac2, _ = st.columns([1, 1, 3])
     with ac1:
@@ -519,10 +506,10 @@ def page_detail(conn):
         if st.button("🗑️ Delete Post"):
             delete_item(conn, item_id)
             st.success("Post deleted.")
+            st.session_state.pop("detail_id", None)
             st.session_state["page"] = "Home"
             st.rerun()
 
-    # Potential matches
     matches = get_potential_matches(conn, row)
     if matches:
         opposite = "Found" if row["item_type"] == "lost" else "Lost"
@@ -547,22 +534,46 @@ def main():
 
     conn = get_db()
 
-    # Sidebar navigation
-    st.sidebar.markdown("# 🔎 Lost & Found Hub")
-    st.sidebar.caption("Community board for lost and found items")
-    st.sidebar.markdown("---")
+    # Initialize page state
+    if "page" not in st.session_state:
+        st.session_state["page"] = "Home"
 
     pages = ["Home", "Report Lost", "Report Found", "Browse Lost", "Browse Found"]
     icons = ["🏠", "🔴", "🟢", "📋", "📋"]
 
-    # Preserve page navigation from detail view
-    default_idx = 0
-    if "page" in st.session_state:
-        name = st.session_state["page"]
-        if name in pages:
-            default_idx = pages.index(name)
-        elif name == "Detail":
-            default_idx = 0  # render detail separately
+    # Render detail page first — sidebar should not interfere
+    if st.session_state.get("page") == "Detail":
+        # Show sidebar radio locked to no visible selection to avoid confusion
+        st.sidebar.markdown("# 🔎 Lost & Found Hub")
+        st.sidebar.caption("Community board for lost and found items")
+        st.sidebar.markdown("---")
+        # Sidebar nav still renders so user can escape detail view by clicking a page
+        selected = st.sidebar.radio(
+            "Navigate",
+            pages,
+            index=0,
+            format_func=lambda p: f"{icons[pages.index(p)]}  {p}",
+            label_visibility="collapsed",
+            key="nav_radio",
+        )
+        # If user explicitly clicks a sidebar item, navigate there
+        if st.session_state.get("_last_nav") != selected:
+            st.session_state["_last_nav"] = selected
+            st.session_state["page"] = selected
+            st.session_state.pop("detail_id", None)
+            st.rerun()
+
+        page_detail(conn)
+        conn.close()
+        return
+
+    # Normal navigation
+    st.sidebar.markdown("# 🔎 Lost & Found Hub")
+    st.sidebar.caption("Community board for lost and found items")
+    st.sidebar.markdown("---")
+
+    current_page = st.session_state["page"]
+    default_idx = pages.index(current_page) if current_page in pages else 0
 
     selected = st.sidebar.radio(
         "Navigate",
@@ -570,14 +581,16 @@ def main():
         index=default_idx,
         format_func=lambda p: f"{icons[pages.index(p)]}  {p}",
         label_visibility="collapsed",
+        key="nav_radio",
     )
 
-    # If we're in detail view, don't let sidebar click override unless user actually clicks
-    if st.session_state.get("page") == "Detail" and selected == pages[default_idx]:
-        page_detail(conn)
-        return
+    # Only update page state when user actually changes the sidebar selection
+    if selected != st.session_state["page"]:
+        st.session_state["page"] = selected
+        st.session_state.pop("detail_id", None)
+        st.rerun()
 
-    st.session_state["page"] = selected
+    st.session_state["_last_nav"] = selected
 
     if selected == "Home":
         page_home(conn)
