@@ -153,7 +153,6 @@ def apply_styles():
         --ink2:        #6b6b80;
         --ink3:        #a0a0b0;
         --accent:      #e8532b;
-        --accent-g:    rgba(232,83,43,.12);
         --red:         #c0392b;
         --red-bg:      #fef2f2;
         --green:       #1a7a4c;
@@ -168,53 +167,13 @@ def apply_styles():
         --ff-b:        'DM Sans', system-ui, sans-serif;
     }
 
-    .stApp, .stApp > header {
+    .stApp {
         background: var(--cream) !important;
         font-family: var(--ff-b) !important;
     }
     .block-container {
         max-width: 960px !important;
         padding-top: 2rem !important;
-    }
-
-    .stApp,
-    .stMainBlockContainer,
-    .stMainBlockContainer p,
-    .stMainBlockContainer span,
-    .stMainBlockContainer div,
-    .stMainBlockContainer label,
-    .stMainBlockContainer li,
-    .stMainBlockContainer td,
-    .stMainBlockContainer th,
-    .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
-    .stCaption, .stCaption p,
-    .stAlert p,
-    .stTextInput label, .stTextArea label,
-    .stSelectbox label, .stDateInput label,
-    .stFileUploader label, .stFileUploader span,
-    .stRadio label, .stCheckbox label,
-    [data-testid="stFormSubmitButton"] button {
-        color: var(--ink) !important;
-    }
-    .stTextInput input, .stTextArea textarea {
-        color: var(--ink) !important;
-        background: var(--surface) !important;
-    }
-    .stSelectbox > div > div,
-    .stSelectbox > div > div > div {
-        color: var(--ink) !important;
-        background: var(--surface) !important;
-    }
-    .stDateInput input {
-        color: var(--ink) !important;
-        background: var(--surface) !important;
-    }
-    .stFileUploader > div {
-        background: var(--surface) !important;
-    }
-    .stForm {
-        background: var(--surface) !important;
-        border-color: var(--bdr) !important;
     }
 
     h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
@@ -225,7 +184,6 @@ def apply_styles():
     }
     p, li, label, .stMarkdown p {
         font-family: var(--ff-b) !important;
-        color: var(--ink) !important;
     }
 
     section[data-testid="stSidebar"] {
@@ -346,8 +304,8 @@ def apply_styles():
         padding-bottom: .4rem; margin-bottom: .8rem;
     }
 
-    .bc { font-size: .8rem; color: var(--ink2) !important; margin-bottom: .5rem; }
-    .bc b { color: var(--ink) !important; }
+    .bc { font-size: .8rem; color: var(--ink2); margin-bottom: .5rem; }
+    .bc b { color: var(--ink); }
     .bc .sep { margin: 0 .35rem; color: var(--ink3); }
 
     .hero { text-align: center; padding: 3.5rem 1rem 2rem; }
@@ -426,33 +384,6 @@ def apply_styles():
     hr { border-color: var(--bdr) !important; opacity: .4 !important; }
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 3px; }
-
-    .stMainBlockContainer [data-testid="stCaptionContainer"],
-    .stMainBlockContainer [data-testid="stCaptionContainer"] p {
-        color: var(--ink2) !important;
-    }
-    .stMainBlockContainer .stAlert [data-testid="stMarkdownContainer"] p {
-        color: inherit !important;
-    }
-    .stMainBlockContainer strong, .stMainBlockContainer b {
-        color: var(--ink) !important;
-    }
-    .stMainBlockContainer code {
-        color: var(--ink2) !important;
-        background: var(--warm) !important;
-    }
-    .stMainBlockContainer [data-testid="stFormSubmitButton"] button {
-        color: var(--ink) !important;
-    }
-    .stMainBlockContainer [data-testid="stFormSubmitButton"] button p {
-        color: inherit !important;
-    }
-    header[data-testid="stHeader"] {
-        background: var(--cream) !important;
-    }
-    .stApp [data-testid="stToolbar"] {
-        background: var(--cream) !important;
-    }
     </style>
     """, unsafe_allow_html=True)
 
