@@ -1,20 +1,27 @@
 """
 Lost & Found Hub — a Streamlit community board for posting and finding lost items.
-Run:  streamlit run app.py
+Backed by Supabase (Postgres + Storage).
+
+Run:
+    1. Copy .env.example to .env and fill in your Supabase credentials
+    2. Run setup.sql in your Supabase SQL Editor
+    3. pip install -r requirements.txt
+    4. streamlit run app.py
 """
 
+import os
 import streamlit as st
-import sqlite3
 import uuid
-import hashlib
 from datetime import datetime, date, timedelta
-from pathlib import Path
+from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# ── Database ────────────────────────────────────────────────────────────────────
+load_dotenv()
 
-DB_PATH = Path(__file__).parent / "lost_and_found.db"
-PHOTO_DIR = Path(__file__).parent / "photos"
-PHOTO_DIR.mkdir(exist_ok=True)
+# ── Supabase client ─────────────────────────────────────────────────────────────
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
 CATEGORIES = [
     "Electronics", "Wallet / Purse", "Keys", "Clothing",
@@ -27,65 +34,49 @@ PAGE_ICONS = {"Home": "🏠", "Report Lost": "🔴", "Report Found": "🟢",
               "Browse Lost": "📋", "Browse Found": "📋", "Detail": "📄"}
 
 
-def get_db():
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS items (
-            id           TEXT PRIMARY KEY,
-            item_type    TEXT NOT NULL CHECK(item_type IN ('lost','found')),
-            title        TEXT NOT NULL,
-            description  TEXT,
-            category     TEXT,
-            location     TEXT,
-            date_occurred TEXT,
-            date_posted  TEXT NOT NULL,
-            contact_name TEXT,
-            contact_email TEXT,
-            contact_phone TEXT,
-            photo_id     TEXT,
-            status       TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved'))
+@st.cache_resource
+def get_supabase() -> Client:
+    """Create a single Supabase client cached across reruns."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error(
+            "Missing Supabase credentials. "
+            "Set SUPABASE_URL and SUPABASE_KEY in your .env file."
         )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS dev_users (
-            id    TEXT PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE,
-            name  TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    return conn
+        st.stop()
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 # ── Auth helpers ────────────────────────────────────────────────────────────────
 
-def get_dev_emails(conn) -> list[str]:
-    rows = conn.execute("SELECT email FROM dev_users ORDER BY created_at").fetchall()
-    return [r["email"] for r in rows]
+def get_dev_emails(sb: Client) -> list[str]:
+    resp = sb.table("dev_users").select("email").order("created_at").execute()
+    return [r["email"] for r in resp.data]
 
 
-def is_dev_email(conn, email: str) -> bool:
-    row = conn.execute(
-        "SELECT id FROM dev_users WHERE LOWER(email) = LOWER(?)", (email.strip(),)
-    ).fetchone()
-    return row is not None
-
-
-def add_dev_user(conn, email: str, name: str = "") -> str:
-    uid = uuid.uuid4().hex[:12]
-    conn.execute(
-        "INSERT INTO dev_users (id, email, name, created_at) VALUES (?,?,?,?)",
-        (uid, email.strip().lower(), name.strip(), datetime.now().isoformat(timespec="seconds")),
+def is_dev_email(sb: Client, email: str) -> bool:
+    resp = (
+        sb.table("dev_users")
+        .select("id")
+        .ilike("email", email.strip())
+        .execute()
     )
-    conn.commit()
+    return len(resp.data) > 0
+
+
+def add_dev_user(sb: Client, email: str, name: str = "") -> str:
+    uid = uuid.uuid4().hex[:12]
+    sb.table("dev_users").insert({
+        "id": uid,
+        "email": email.strip().lower(),
+        "name": name.strip(),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }).execute()
     return uid
 
 
-def dev_count(conn) -> int:
-    return conn.execute("SELECT COUNT(*) as c FROM dev_users").fetchone()["c"]
+def dev_count(sb: Client) -> int:
+    resp = sb.table("dev_users").select("id", count="exact").execute()
+    return resp.count or 0
 
 
 def is_logged_in() -> bool:
@@ -103,122 +94,145 @@ def logout():
 
 # ── Item CRUD ───────────────────────────────────────────────────────────────────
 
-def insert_item(conn, data: dict) -> str:
+def insert_item(sb: Client, data: dict) -> str:
     item_id = uuid.uuid4().hex[:12]
-    conn.execute(
-        """INSERT INTO items
-           (id, item_type, title, description, category, location,
-            date_occurred, date_posted, contact_name, contact_email,
-            contact_phone, photo_id, status)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (
-            item_id,
-            data["item_type"],
-            data["title"],
-            data["description"],
-            data["category"],
-            data["location"],
-            data["date_occurred"],
-            datetime.now().isoformat(timespec="seconds"),
-            data["contact_name"],
-            data["contact_email"],
-            data["contact_phone"],
-            data.get("photo_id"),
-            "open",
-        ),
-    )
-    conn.commit()
+    sb.table("items").insert({
+        "id": item_id,
+        "item_type": data["item_type"],
+        "title": data["title"],
+        "description": data["description"],
+        "category": data["category"],
+        "location": data["location"],
+        "date_occurred": data["date_occurred"],
+        "date_posted": datetime.now().isoformat(timespec="seconds"),
+        "contact_name": data["contact_name"],
+        "contact_email": data["contact_email"],
+        "contact_phone": data["contact_phone"],
+        "photo_id": data.get("photo_id"),
+        "status": "open",
+    }).execute()
     return item_id
 
 
-def save_photo(uploaded_file) -> str | None:
+def save_photo(sb: Client, uploaded_file) -> str | None:
+    """Upload a photo to Supabase Storage and return the storage path."""
     if uploaded_file is None:
         return None
     photo_id = uuid.uuid4().hex[:16]
     ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
-    path = PHOTO_DIR / f"{photo_id}.{ext}"
-    path.write_bytes(uploaded_file.getvalue())
-    return f"{photo_id}.{ext}"
+    storage_path = f"{photo_id}.{ext}"
+    file_bytes = uploaded_file.getvalue()
+
+    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "webp": "image/webp"}
+    content_type = mime_map.get(ext, "application/octet-stream")
+
+    sb.storage.from_("photos").upload(
+        path=storage_path,
+        file=file_bytes,
+        file_options={"content-type": content_type},
+    )
+    return storage_path
 
 
-def load_photo_bytes(photo_id: str) -> bytes | None:
+def get_photo_url(sb: Client, photo_id: str) -> str | None:
+    """Get the public URL for a photo in Supabase Storage."""
     if not photo_id:
         return None
-    path = PHOTO_DIR / photo_id
-    if path.exists():
-        return path.read_bytes()
-    return None
+    return sb.storage.from_("photos").get_public_url(photo_id)
 
 
-def search_items(conn, item_type: str, query: str = "", category: str = "All",
-                 status: str = "open", days: int = 0):
-    sql = "SELECT * FROM items WHERE item_type = ? AND status = ?"
-    params: list = [item_type, status]
+def delete_photo(sb: Client, photo_id: str):
+    """Remove a photo from Supabase Storage."""
+    if not photo_id:
+        return
+    try:
+        sb.storage.from_("photos").remove([photo_id])
+    except Exception:
+        pass  # photo may already be gone
+
+
+def search_items(sb: Client, item_type: str, query: str = "",
+                 category: str = "All", status: str = "open", days: int = 0):
+    q = (
+        sb.table("items")
+        .select("*")
+        .eq("item_type", item_type)
+        .eq("status", status)
+    )
 
     if category and category != "All":
-        sql += " AND category = ?"
-        params.append(category)
+        q = q.eq("category", category)
+
     if query:
-        sql += " AND (title LIKE ? OR description LIKE ? OR location LIKE ?)"
         wild = f"%{query}%"
-        params.extend([wild, wild, wild])
+        q = q.or_(
+            f"title.ilike.{wild},"
+            f"description.ilike.{wild},"
+            f"location.ilike.{wild}"
+        )
+
     if days > 0:
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        sql += " AND date_posted >= ?"
-        params.append(cutoff)
+        q = q.gte("date_posted", cutoff)
 
-    sql += " ORDER BY date_posted DESC"
-    return conn.execute(sql, params).fetchall()
-
-
-def get_item(conn, item_id: str):
-    return conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
+    q = q.order("date_posted", desc=True)
+    resp = q.execute()
+    return resp.data
 
 
-def resolve_item(conn, item_id: str):
-    conn.execute("UPDATE items SET status = 'resolved' WHERE id = ?", (item_id,))
-    conn.commit()
+def get_item(sb: Client, item_id: str):
+    resp = sb.table("items").select("*").eq("id", item_id).execute()
+    return resp.data[0] if resp.data else None
 
 
-def reopen_item(conn, item_id: str):
-    conn.execute("UPDATE items SET status = 'open' WHERE id = ?", (item_id,))
-    conn.commit()
+def resolve_item(sb: Client, item_id: str):
+    sb.table("items").update({"status": "resolved"}).eq("id", item_id).execute()
 
 
-def delete_item(conn, item_id: str):
-    row = get_item(conn, item_id)
-    if row and row["photo_id"]:
-        p = PHOTO_DIR / row["photo_id"]
-        if p.exists():
-            p.unlink()
-    conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-    conn.commit()
+def reopen_item(sb: Client, item_id: str):
+    sb.table("items").update({"status": "open"}).eq("id", item_id).execute()
 
 
-def get_potential_matches(conn, item):
+def delete_item(sb: Client, item_id: str):
+    row = get_item(sb, item_id)
+    if row and row.get("photo_id"):
+        delete_photo(sb, row["photo_id"])
+    sb.table("items").delete().eq("id", item_id).execute()
+
+
+def get_potential_matches(sb: Client, item: dict):
     opposite = "found" if item["item_type"] == "lost" else "lost"
     matches = []
 
-    if item["category"]:
-        rows = conn.execute(
-            """SELECT * FROM items
-               WHERE item_type = ? AND status = 'open' AND category = ?
-               ORDER BY date_posted DESC LIMIT 10""",
-            (opposite, item["category"]),
-        ).fetchall()
-        matches.extend(rows)
+    if item.get("category"):
+        resp = (
+            sb.table("items")
+            .select("*")
+            .eq("item_type", opposite)
+            .eq("status", "open")
+            .eq("category", item["category"])
+            .order("date_posted", desc=True)
+            .limit(10)
+            .execute()
+        )
+        matches.extend(resp.data)
 
-    if item["title"]:
+    if item.get("title"):
         words = [w for w in item["title"].lower().split() if len(w) > 3]
         for word in words[:4]:
-            rows = conn.execute(
-                """SELECT * FROM items
-                   WHERE item_type = ? AND status = 'open'
-                     AND (title LIKE ? OR description LIKE ?)
-                   ORDER BY date_posted DESC LIMIT 5""",
-                (opposite, f"%{word}%", f"%{word}%"),
-            ).fetchall()
-            matches.extend(rows)
+            wild = f"%{word}%"
+            resp = (
+                sb.table("items")
+                .select("*")
+                .eq("item_type", opposite)
+                .eq("status", "open")
+                .or_(f"title.ilike.{wild},description.ilike.{wild}")
+                .order("date_posted", desc=True)
+                .limit(5)
+                .execute()
+            )
+            matches.extend(resp.data)
 
     seen = set()
     unique = []
@@ -229,14 +243,18 @@ def get_potential_matches(conn, item):
     return unique[:8]
 
 
-def count_stats(conn):
-    rows = conn.execute(
-        """SELECT item_type, status, COUNT(*) as cnt
-           FROM items GROUP BY item_type, status"""
-    ).fetchall()
+def count_stats(sb: Client) -> dict:
     stats = {"lost_open": 0, "lost_resolved": 0, "found_open": 0, "found_resolved": 0}
-    for r in rows:
-        stats[f"{r['item_type']}_{r['status']}"] = r["cnt"]
+    for item_type in ("lost", "found"):
+        for status in ("open", "resolved"):
+            resp = (
+                sb.table("items")
+                .select("id", count="exact")
+                .eq("item_type", item_type)
+                .eq("status", status)
+                .execute()
+            )
+            stats[f"{item_type}_{status}"] = resp.count or 0
     return stats
 
 
@@ -321,7 +339,6 @@ def apply_styles():
     }
     .breadcrumb span { color: #bbb; margin: 0 .35rem; }
 
-    /* ── Landing page ────────────────────────── */
     .landing-hero {
         text-align: center;
         padding: 3rem 1rem 2rem;
@@ -358,7 +375,6 @@ def apply_styles():
         margin-bottom: 1rem;
     }
 
-    /* ── Role badge in sidebar ───────────────── */
     .role-badge {
         display: inline-block;
         padding: .2rem .6rem;
@@ -381,12 +397,12 @@ def badge(item_type: str, status: str = "open") -> str:
     return f'<span class="badge {cls}">{label}</span>'
 
 
-def item_card_html(row) -> str:
+def item_card_html(row: dict) -> str:
     date_str = ""
-    if row["date_occurred"]:
+    if row.get("date_occurred"):
         date_str = f" &middot; {row['date_occurred']}"
-    loc = f" &middot; 📍 {row['location']}" if row["location"] else ""
-    cat = f" &middot; {row['category']}" if row["category"] else ""
+    loc = f" &middot; 📍 {row['location']}" if row.get("location") else ""
+    cat = f" &middot; {row['category']}" if row.get("category") else ""
     return f"""
     <div class="item-card">
         {badge(row['item_type'], row['status'])}
@@ -398,16 +414,32 @@ def item_card_html(row) -> str:
 
 def render_breadcrumb(*parts):
     crumbs = []
-    for label, page in parts[:-1]:
+    for label, _page in parts[:-1]:
         crumbs.append(f"{label}")
     crumbs.append(f"**{parts[-1][0]}**")
     sep = ' <span>›</span> '
     st.markdown(f'<div class="breadcrumb">{sep.join(crumbs)}</div>', unsafe_allow_html=True)
 
 
+def show_photo(sb: Client, photo_id: str | None, width: int | None = None,
+               use_container_width: bool = False):
+    """Display a photo from Supabase Storage, or a placeholder."""
+    if photo_id:
+        url = get_photo_url(sb, photo_id)
+        if url:
+            st.image(url, width=width, use_container_width=use_container_width)
+            return
+    st.markdown(
+        '<div style="background:#f0f1f4;border-radius:12px;height:200px;'
+        'display:flex;align-items:center;justify-content:center;color:#aaa;'
+        'font-size:2.5rem;">📷</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── Landing / Auth Page ─────────────────────────────────────────────────────────
 
-def page_landing(conn):
+def page_landing(sb: Client):
     st.markdown("""
     <div class="landing-hero">
         <h1>🔎 Lost & Found Hub</h1>
@@ -447,7 +479,7 @@ def page_landing(conn):
         st.markdown("---")
         st.markdown("### 🔐 Dev Login")
 
-        has_devs = dev_count(conn) > 0
+        has_devs = dev_count(sb) > 0
 
         if has_devs:
             st.caption("Enter your registered dev email to log in.")
@@ -458,14 +490,17 @@ def page_landing(conn):
             if submitted:
                 if not email.strip():
                     st.error("Please enter an email address.")
-                elif is_dev_email(conn, email):
+                elif is_dev_email(sb, email):
                     st.session_state["auth_role"] = "dev"
                     st.session_state["auth_email"] = email.strip().lower()
                     st.session_state["page"] = "Home"
                     st.session_state.pop("show_login", None)
                     st.rerun()
                 else:
-                    st.error("This email is not registered as a dev account. Contact an existing dev to be added.")
+                    st.error(
+                        "This email is not registered as a dev account. "
+                        "Contact an existing dev to be added."
+                    )
         else:
             st.info("No dev accounts exist yet. Create the first one below to become the admin.")
             with st.form("setup_form"):
@@ -482,7 +517,7 @@ def page_landing(conn):
                 elif "@" not in email or "." not in email.split("@")[-1]:
                     st.error("Please enter a valid email address.")
                 else:
-                    add_dev_user(conn, email, name)
+                    add_dev_user(sb, email, name)
                     st.session_state["auth_role"] = "dev"
                     st.session_state["auth_email"] = email.strip().lower()
                     st.session_state["auth_name"] = name.strip()
@@ -498,10 +533,9 @@ def page_landing(conn):
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────────
 
-def render_sidebar(conn):
+def render_sidebar(sb: Client):
     st.sidebar.markdown("# 🔎 Lost & Found Hub")
 
-    # Show role badge and user info
     if is_dev():
         email = st.session_state.get("auth_email", "")
         st.sidebar.markdown(
@@ -531,12 +565,11 @@ def render_sidebar(conn):
             type="primary" if is_active else "secondary",
         )
 
-    # Dev-only: manage dev accounts
     if is_dev():
         st.sidebar.markdown("---")
         st.sidebar.markdown("##### Dev Tools")
         with st.sidebar.expander("Manage Dev Accounts"):
-            existing = get_dev_emails(conn)
+            existing = get_dev_emails(sb)
             for em in existing:
                 st.sidebar.text(f"• {em}")
             st.sidebar.markdown("")
@@ -544,10 +577,10 @@ def render_sidebar(conn):
                                                placeholder="new-dev@example.com")
             if st.sidebar.button("Add Dev", key="btn_add_dev"):
                 if new_email.strip() and "@" in new_email:
-                    if is_dev_email(conn, new_email):
+                    if is_dev_email(sb, new_email):
                         st.sidebar.warning("Already registered.")
                     else:
-                        add_dev_user(conn, new_email)
+                        add_dev_user(sb, new_email)
                         st.sidebar.success(f"Added {new_email.strip().lower()}")
                         st.rerun()
                 else:
@@ -555,7 +588,6 @@ def render_sidebar(conn):
 
     st.sidebar.markdown("---")
 
-    # Log out / switch
     if st.sidebar.button("🚪 Log Out", use_container_width=True):
         logout()
         st.rerun()
@@ -568,31 +600,26 @@ def render_sidebar(conn):
 
 # ── Pages ───────────────────────────────────────────────────────────────────────
 
-def page_home(conn):
+def page_home(sb: Client):
     st.markdown("## 🏠 Dashboard")
 
-    # Quick-action buttons
     qa1, qa2, qa3, qa4 = st.columns(4)
     with qa1:
         if st.button("🔴 Report Lost", use_container_width=True, key="qa_rl"):
-            navigate_to("Report Lost")
-            st.rerun()
+            navigate_to("Report Lost"); st.rerun()
     with qa2:
         if st.button("🟢 Report Found", use_container_width=True, key="qa_rf"):
-            navigate_to("Report Found")
-            st.rerun()
+            navigate_to("Report Found"); st.rerun()
     with qa3:
         if st.button("📋 Browse Lost", use_container_width=True, key="qa_bl"):
-            navigate_to("Browse Lost")
-            st.rerun()
+            navigate_to("Browse Lost"); st.rerun()
     with qa4:
         if st.button("📋 Browse Found", use_container_width=True, key="qa_bf"):
-            navigate_to("Browse Found")
-            st.rerun()
+            navigate_to("Browse Found"); st.rerun()
 
     st.markdown("")
 
-    stats = count_stats(conn)
+    stats = count_stats(sb)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""<div class="stat-card stat-lost">
@@ -619,7 +646,7 @@ def page_home(conn):
 
     with col_l:
         st.markdown('<div class="section-head">🔴 Recently Lost</div>', unsafe_allow_html=True)
-        lost = search_items(conn, "lost")[:5]
+        lost = search_items(sb, "lost")[:5]
         if lost:
             for row in lost:
                 st.markdown(item_card_html(row), unsafe_allow_html=True)
@@ -631,7 +658,7 @@ def page_home(conn):
 
     with col_r:
         st.markdown('<div class="section-head">🟢 Recently Found</div>', unsafe_allow_html=True)
-        found = search_items(conn, "found")[:5]
+        found = search_items(sb, "found")[:5]
         if found:
             for row in found:
                 st.markdown(item_card_html(row), unsafe_allow_html=True)
@@ -642,7 +669,7 @@ def page_home(conn):
             st.info("No found items posted yet.")
 
 
-def page_post(conn, item_type: str):
+def page_post(sb: Client, item_type: str):
     emoji = "🔴" if item_type == "lost" else "🟢"
     verb = "Lost" if item_type == "lost" else "Found"
 
@@ -666,8 +693,10 @@ def page_post(conn, item_type: str):
                 value=date.today(),
                 max_value=date.today(),
             )
-        location = st.text_input("Location", placeholder="e.g. Central Park near the fountain")
-        photo = st.file_uploader("Photo (optional)", type=["png", "jpg", "jpeg", "webp"])
+        location = st.text_input("Location",
+                                  placeholder="e.g. Central Park near the fountain")
+        photo = st.file_uploader("Photo (optional)",
+                                  type=["png", "jpg", "jpeg", "webp"])
 
         st.markdown("#### Your Contact Info")
         cc1, cc2, cc3 = st.columns(3)
@@ -678,15 +707,16 @@ def page_post(conn, item_type: str):
         with cc3:
             contact_phone = st.text_input("Phone")
 
-        submitted = st.form_submit_button(f"📌  Post {verb} Item", use_container_width=True)
+        submitted = st.form_submit_button(f"📌  Post {verb} Item",
+                                           use_container_width=True)
 
     if submitted:
         if not title.strip():
             st.error("Please enter an item title.")
             return
 
-        photo_id = save_photo(photo)
-        item_id = insert_item(conn, {
+        photo_id = save_photo(sb, photo)
+        item_id = insert_item(sb, {
             "item_type": item_type,
             "title": title.strip(),
             "description": description.strip(),
@@ -704,14 +734,13 @@ def page_post(conn, item_type: str):
         vc1, vc2, _ = st.columns([1, 1, 2])
         with vc1:
             if st.button("📄 View your post"):
-                go_to_detail(item_id)
-                st.rerun()
+                go_to_detail(item_id); st.rerun()
         with vc2:
             if st.button(f"➕ Post another {verb.lower()} item"):
                 st.rerun()
 
 
-def page_browse(conn, item_type: str):
+def page_browse(sb: Client, item_type: str):
     emoji = "🔴" if item_type == "lost" else "🟢"
     verb = "Lost" if item_type == "lost" else "Found"
 
@@ -726,15 +755,17 @@ def page_browse(conn, item_type: str):
         cat_filter = st.selectbox("Category", ["All"] + CATEGORIES,
                                    label_visibility="collapsed")
     with fc3:
-        time_filter = st.selectbox("Time range",
-                                    ["All time", "Last 7 days", "Last 30 days", "Last 90 days"],
-                                    label_visibility="collapsed")
+        time_filter = st.selectbox(
+            "Time range",
+            ["All time", "Last 7 days", "Last 30 days", "Last 90 days"],
+            label_visibility="collapsed",
+        )
     with fc4:
         status_filter = st.selectbox("Status", ["open", "resolved"],
                                       label_visibility="collapsed")
 
     days_map = {"All time": 0, "Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90}
-    results = search_items(conn, item_type, query, cat_filter,
+    results = search_items(sb, item_type, query, cat_filter,
                            status_filter, days_map[time_filter])
 
     st.caption(f"{len(results)} result{'s' if len(results) != 1 else ''}")
@@ -748,9 +779,10 @@ def page_browse(conn, item_type: str):
         with cols[i % 2]:
             st.markdown(item_card_html(row), unsafe_allow_html=True)
 
-            photo_bytes = load_photo_bytes(row["photo_id"])
-            if photo_bytes:
-                st.image(photo_bytes, width=200)
+            if row.get("photo_id"):
+                url = get_photo_url(sb, row["photo_id"])
+                if url:
+                    st.image(url, width=200)
 
             if st.button("View details →", key=f"browse_{item_type}_{row['id']}",
                          on_click=go_to_detail, args=(row["id"],)):
@@ -758,76 +790,68 @@ def page_browse(conn, item_type: str):
             st.markdown("")
 
 
-def page_detail(conn):
+def page_detail(sb: Client):
     item_id = st.session_state.get("detail_id")
     if not item_id:
         st.warning("No item selected.")
         if st.button("← Go to Home"):
-            navigate_to("Home")
-            st.rerun()
+            navigate_to("Home"); st.rerun()
         return
 
-    row = get_item(conn, item_id)
+    row = get_item(sb, item_id)
     if not row:
         st.error("Item not found (it may have been deleted).")
         if st.button("← Go to Home"):
-            navigate_to("Home")
-            st.rerun()
+            navigate_to("Home"); st.rerun()
         return
 
     verb = "Lost" if row["item_type"] == "lost" else "Found"
     browse_page = f"Browse {verb}"
 
-    render_breadcrumb(("Home", "Home"), (f"Browse {verb}", browse_page), (row["title"], None))
+    render_breadcrumb(("Home", "Home"), (f"Browse {verb}", browse_page),
+                      (row["title"], None))
 
     if st.button(f"← Back to {browse_page}"):
-        navigate_to(browse_page)
-        st.rerun()
+        navigate_to(browse_page); st.rerun()
 
-    st.markdown(f"{badge(row['item_type'], row['status'])} &nbsp; `{row['id']}`",
-                unsafe_allow_html=True)
+    st.markdown(
+        f"{badge(row['item_type'], row['status'])} &nbsp; `{row['id']}`",
+        unsafe_allow_html=True,
+    )
     st.markdown(f"# {row['title']}")
 
     col_img, col_info = st.columns([1, 2])
 
     with col_img:
-        photo_bytes = load_photo_bytes(row["photo_id"])
-        if photo_bytes:
-            st.image(photo_bytes, use_container_width=True)
-        else:
-            st.markdown(
-                '<div style="background:#f0f1f4;border-radius:12px;height:200px;'
-                'display:flex;align-items:center;justify-content:center;color:#aaa;'
-                'font-size:2.5rem;">📷</div>',
-                unsafe_allow_html=True,
-            )
+        show_photo(sb, row.get("photo_id"), use_container_width=True)
 
     with col_info:
-        if row["category"]:
+        if row.get("category"):
             st.markdown(f"**Category:** {row['category']}")
-        if row["location"]:
+        if row.get("location"):
             st.markdown(f"**Location:** {row['location']}")
-        if row["date_occurred"]:
+        if row.get("date_occurred"):
             st.markdown(f"**Date {verb.lower()}:** {row['date_occurred']}")
         st.markdown(f"**Posted:** {row['date_posted'][:16].replace('T', ' ')}")
 
-    if row["description"]:
+    if row.get("description"):
         st.markdown("### Description")
         st.markdown(row["description"])
 
-    has_contact = row["contact_name"] or row["contact_email"] or row["contact_phone"]
+    has_contact = (row.get("contact_name") or row.get("contact_email")
+                   or row.get("contact_phone"))
     if has_contact:
         st.markdown("### Contact")
         parts = []
-        if row["contact_name"]:
+        if row.get("contact_name"):
             parts.append(f"**Name:** {row['contact_name']}")
-        if row["contact_email"]:
+        if row.get("contact_email"):
             parts.append(f"**Email:** {row['contact_email']}")
-        if row["contact_phone"]:
+        if row.get("contact_phone"):
             parts.append(f"**Phone:** {row['contact_phone']}")
         st.markdown(" &nbsp;|&nbsp; ".join(parts), unsafe_allow_html=True)
 
-    # ── Actions: dev-only for resolve/reopen/delete ─────────────────────────
+    # ── Actions: dev-only ───────────────────────────────────────────────────
     st.markdown("---")
 
     if is_dev():
@@ -835,18 +859,15 @@ def page_detail(conn):
         with ac1:
             if row["status"] == "open":
                 if st.button("✅ Mark as Resolved"):
-                    resolve_item(conn, item_id)
-                    st.rerun()
+                    resolve_item(sb, item_id); st.rerun()
             else:
                 if st.button("🔄 Reopen"):
-                    reopen_item(conn, item_id)
-                    st.rerun()
+                    reopen_item(sb, item_id); st.rerun()
         with ac2:
             if st.button("🗑️ Delete Post"):
-                delete_item(conn, item_id)
+                delete_item(sb, item_id)
                 st.toast("Post deleted.")
-                navigate_to("Home")
-                st.rerun()
+                navigate_to("Home"); st.rerun()
     else:
         if row["status"] == "open":
             st.caption("🔒 Only dev accounts can mark items as resolved or delete posts.")
@@ -854,7 +875,7 @@ def page_detail(conn):
             st.caption("🔒 This item has been marked as resolved by a dev.")
 
     # Potential matches
-    matches = get_potential_matches(conn, row)
+    matches = get_potential_matches(sb, row)
     if matches:
         opposite = "Found" if row["item_type"] == "lost" else "Lost"
         st.markdown(f"### 🔗 Potential Matches ({opposite} Items)")
@@ -876,38 +897,34 @@ def main():
     )
     apply_styles()
 
-    conn = get_db()
+    sb = get_supabase()
 
-    # ── Auth gate: show landing page if not logged in ───────────────────────
+    # Auth gate
     if not is_logged_in():
-        page_landing(conn)
-        conn.close()
+        page_landing(sb)
         return
 
-    # ── Logged in: show sidebar + routed page ───────────────────────────────
     if "page" not in st.session_state:
         st.session_state["page"] = "Home"
 
-    render_sidebar(conn)
+    render_sidebar(sb)
 
     current_page = st.session_state["page"]
 
     if current_page == "Home":
-        page_home(conn)
+        page_home(sb)
     elif current_page == "Report Lost":
-        page_post(conn, "lost")
+        page_post(sb, "lost")
     elif current_page == "Report Found":
-        page_post(conn, "found")
+        page_post(sb, "found")
     elif current_page == "Browse Lost":
-        page_browse(conn, "lost")
+        page_browse(sb, "lost")
     elif current_page == "Browse Found":
-        page_browse(conn, "found")
+        page_browse(sb, "found")
     elif current_page == "Detail":
-        page_detail(conn)
+        page_detail(sb)
     else:
-        page_home(conn)
-
-    conn.close()
+        page_home(sb)
 
 
 if __name__ == "__main__":
