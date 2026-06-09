@@ -32,8 +32,6 @@ def get_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-# ── Auth ────────────────────────────────────────────────────────────────────────
-
 def get_dev_emails(sb):
     return [r["email"] for r in sb.table("dev_users").select("email").order("created_at").execute().data]
 
@@ -58,8 +56,6 @@ def logout():
     for k in ["auth_role", "auth_email", "auth_name", "page", "detail_id"]:
         st.session_state.pop(k, None)
 
-
-# ── Items ───────────────────────────────────────────────────────────────────────
 
 def insert_item(sb, d):
     iid = uuid.uuid4().hex[:12]
@@ -137,16 +133,12 @@ def count_stats(sb):
     return s
 
 
-# ── Nav ─────────────────────────────────────────────────────────────────────────
-
 def nav(page, **kw):
     st.session_state["page"] = page
     for k, v in kw.items(): st.session_state[k] = v
 
 def go_detail(iid): nav("Detail", detail_id=iid)
 
-
-# ── Styles ──────────────────────────────────────────────────────────────────────
 
 def apply_styles():
     st.markdown("""
@@ -166,7 +158,6 @@ def apply_styles():
         --red-bg:      #fef2f2;
         --green:       #1a7a4c;
         --green-bg:    #ecfdf5;
-        --resolved-bg: #f1f1f1;
         --bdr:         #e8e4dc;
         --sh-s:        0 1px 3px rgba(26,26,46,.06);
         --sh-m:        0 4px 20px rgba(26,26,46,.08);
@@ -177,8 +168,7 @@ def apply_styles():
         --ff-b:        'DM Sans', system-ui, sans-serif;
     }
 
-    /* ── Base ────────────────────────────────── */
-    .stApp {
+    .stApp, .stApp > header {
         background: var(--cream) !important;
         font-family: var(--ff-b) !important;
     }
@@ -187,7 +177,46 @@ def apply_styles():
         padding-top: 2rem !important;
     }
 
-    /* ── Typography ──────────────────────────── */
+    .stApp,
+    .stMainBlockContainer,
+    .stMainBlockContainer p,
+    .stMainBlockContainer span,
+    .stMainBlockContainer div,
+    .stMainBlockContainer label,
+    .stMainBlockContainer li,
+    .stMainBlockContainer td,
+    .stMainBlockContainer th,
+    .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
+    .stCaption, .stCaption p,
+    .stAlert p,
+    .stTextInput label, .stTextArea label,
+    .stSelectbox label, .stDateInput label,
+    .stFileUploader label, .stFileUploader span,
+    .stRadio label, .stCheckbox label,
+    [data-testid="stFormSubmitButton"] button {
+        color: var(--ink) !important;
+    }
+    .stTextInput input, .stTextArea textarea {
+        color: var(--ink) !important;
+        background: var(--surface) !important;
+    }
+    .stSelectbox > div > div,
+    .stSelectbox > div > div > div {
+        color: var(--ink) !important;
+        background: var(--surface) !important;
+    }
+    .stDateInput input {
+        color: var(--ink) !important;
+        background: var(--surface) !important;
+    }
+    .stFileUploader > div {
+        background: var(--surface) !important;
+    }
+    .stForm {
+        background: var(--surface) !important;
+        border-color: var(--bdr) !important;
+    }
+
     h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
         font-family: var(--ff-d) !important;
         color: var(--ink) !important;
@@ -196,9 +225,9 @@ def apply_styles():
     }
     p, li, label, .stMarkdown p {
         font-family: var(--ff-b) !important;
+        color: var(--ink) !important;
     }
 
-    /* ── Sidebar ─────────────────────────────── */
     section[data-testid="stSidebar"] {
         background: var(--ink) !important;
     }
@@ -238,7 +267,6 @@ def apply_styles():
         border-color: var(--accent) !important;
     }
 
-    /* ── Animations ──────────────────────────── */
     @keyframes fadeUp {
         from { opacity: 0; transform: translateY(16px); }
         to   { opacity: 1; transform: translateY(0); }
@@ -249,7 +277,6 @@ def apply_styles():
     .d3 { animation-delay: .14s; }
     .d4 { animation-delay: .21s; }
 
-    /* ── Stat cards ──────────────────────────── */
     .stat {
         background: var(--surface);
         border: 1px solid var(--bdr);
@@ -280,7 +307,6 @@ def apply_styles():
     .s-acc .n  { color: var(--accent); }
     .s-mut .n  { color: var(--ink2); }
 
-    /* ── Item cards ──────────────────────────── */
     .card {
         background: var(--surface);
         border: 1px solid var(--bdr);
@@ -305,7 +331,6 @@ def apply_styles():
     }
     .card .meta { font-size: .78rem; color: var(--ink2); }
 
-    /* ── Badges ──────────────────────────────── */
     .badge {
         display: inline-block; padding: .15rem .6rem; border-radius: 20px;
         font-size: .65rem; font-weight: 600; font-family: var(--ff-b);
@@ -315,19 +340,16 @@ def apply_styles():
     .b-found { background: var(--green-bg); color: var(--green); }
     .b-resolved { background: #f1f1f1; color: var(--ink2); }
 
-    /* ── Section heads ───────────────────────── */
     .sec {
         font-family: var(--ff-d); font-size: 1.05rem; font-weight: 700;
         color: var(--ink); border-bottom: 2px solid var(--bdr);
         padding-bottom: .4rem; margin-bottom: .8rem;
     }
 
-    /* ── Breadcrumb ──────────────────────────── */
-    .bc { font-size: .8rem; color: var(--ink3); margin-bottom: .5rem; }
-    .bc b { color: var(--ink2); }
-    .bc .sep { margin: 0 .35rem; color: var(--bdr); }
+    .bc { font-size: .8rem; color: var(--ink2) !important; margin-bottom: .5rem; }
+    .bc b { color: var(--ink) !important; }
+    .bc .sep { margin: 0 .35rem; color: var(--ink3); }
 
-    /* ── Landing ─────────────────────────────── */
     .hero { text-align: center; padding: 3.5rem 1rem 2rem; }
     .hero h1 {
         font-family: var(--ff-d) !important; font-size: 3rem !important;
@@ -362,7 +384,6 @@ def apply_styles():
     }
     .lcard p { font-size: .85rem; color: var(--ink2); line-height: 1.5; margin-bottom: 1rem; }
 
-    /* ── Role badges ─────────────────────────── */
     .rbadge {
         display: inline-block; padding: .18rem .6rem; border-radius: 20px;
         font-size: .68rem; font-weight: 600; text-transform: uppercase;
@@ -371,7 +392,6 @@ def apply_styles():
     .rb-dev { background: rgba(232,83,43,.18); color: #ff6b4a; }
     .rb-guest { background: rgba(255,255,255,.08); color: #999; }
 
-    /* ── Buttons ─────────────────────────────── */
     .stMainBlockContainer .stButton > button {
         font-family: var(--ff-b) !important; font-weight: 600 !important;
         border-radius: var(--rs) !important;
@@ -385,13 +405,11 @@ def apply_styles():
         color: #fff !important;
     }
 
-    /* ── Forms ───────────────────────────────── */
     .stTextInput input, .stTextArea textarea, .stSelectbox > div > div {
         font-family: var(--ff-b) !important;
         border-radius: var(--rs) !important;
     }
 
-    /* ── Photo placeholder ───────────────────── */
     .ph-empty {
         background: var(--warm); border: 2px dashed var(--bdr);
         border-radius: var(--r); height: 180px;
@@ -399,22 +417,45 @@ def apply_styles():
         color: var(--ink3); font-size: 2.2rem;
     }
 
-    /* ── Detail title ────────────────────────── */
     .dtitle {
         font-family: var(--ff-d); font-size: 1.8rem; font-weight: 700;
         color: var(--ink); letter-spacing: -0.02em; line-height: 1.2;
         margin: .4rem 0 .8rem;
     }
 
-    /* ── Misc ────────────────────────────────── */
     hr { border-color: var(--bdr) !important; opacity: .4 !important; }
     ::-webkit-scrollbar { width: 5px; }
     ::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 3px; }
+
+    .stMainBlockContainer [data-testid="stCaptionContainer"],
+    .stMainBlockContainer [data-testid="stCaptionContainer"] p {
+        color: var(--ink2) !important;
+    }
+    .stMainBlockContainer .stAlert [data-testid="stMarkdownContainer"] p {
+        color: inherit !important;
+    }
+    .stMainBlockContainer strong, .stMainBlockContainer b {
+        color: var(--ink) !important;
+    }
+    .stMainBlockContainer code {
+        color: var(--ink2) !important;
+        background: var(--warm) !important;
+    }
+    .stMainBlockContainer [data-testid="stFormSubmitButton"] button {
+        color: var(--ink) !important;
+    }
+    .stMainBlockContainer [data-testid="stFormSubmitButton"] button p {
+        color: inherit !important;
+    }
+    header[data-testid="stHeader"] {
+        background: var(--cream) !important;
+    }
+    .stApp [data-testid="stToolbar"] {
+        background: var(--cream) !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-
-# ── HTML helpers ────────────────────────────────────────────────────────────────
 
 def badge_html(t, s="open"):
     if s == "resolved": return '<span class="badge b-resolved">Resolved</span>'
@@ -439,8 +480,6 @@ def show_photo(sb, pid, **kw):
         if url: st.image(url, **kw); return
     st.markdown('<div class="ph-empty">📷</div>', unsafe_allow_html=True)
 
-
-# ── Landing ─────────────────────────────────────────────────────────────────────
 
 def page_landing(sb):
     st.markdown('<div class="hero"><h1>Lost & <span class="hi">Found</span> Hub</h1><div class="sub">Reuniting people with what matters</div></div>', unsafe_allow_html=True)
@@ -486,8 +525,6 @@ def page_landing(sb):
         if st.button("← Back"): st.session_state.pop("show_login", None); st.rerun()
 
 
-# ── Sidebar ─────────────────────────────────────────────────────────────────────
-
 def render_sidebar(sb):
     st.sidebar.markdown("# Lost & Found")
     if is_dev():
@@ -514,8 +551,6 @@ def render_sidebar(sb):
                 if is_dev_email(sb, new_email): st.sidebar.warning("Already exists.")
                 else: add_dev_user(sb, new_email); st.rerun()
 
-
-# ── Pages ───────────────────────────────────────────────────────────────────────
 
 def page_home(sb):
     st.markdown("## Dashboard")
@@ -675,8 +710,6 @@ def page_detail(sb):
             st.markdown(card_html(m, i), unsafe_allow_html=True)
             st.button("View", key=f"m_{m['id']}", on_click=go_detail, args=(m["id"],))
 
-
-# ── Main ────────────────────────────────────────────────────────────────────────
 
 def main():
     st.set_page_config(page_title="Lost & Found Hub", page_icon="🔎", layout="centered")
