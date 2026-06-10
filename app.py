@@ -173,6 +173,43 @@ def apply_styles():
     .dtitle{font-family:var(--ff-d);font-size:1.8rem;font-weight:700;color:var(--ink);letter-spacing:-0.02em;line-height:1.2;margin:.4rem 0 .8rem}
     hr{border-color:var(--bdr)!important;opacity:.4!important}
     ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
+
+    /* ── Stat button cards ───────────────────── */
+    .statlbl{text-align:center;font-size:.72rem;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.08em;margin-top:-8px;padding-bottom:4px}
+    .statlbl-red{color:var(--red)}.statlbl-grn{color:var(--green)}.statlbl-acc{color:var(--accent)}.statlbl-mut{color:var(--ink2)}
+
+    /* Style the first 4 buttons after Dashboard heading as stat cards */
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type .stButton>button {
+        background:var(--surface)!important;
+        border:1px solid var(--bdr)!important;
+        border-radius:var(--r)!important;
+        padding:1.4rem .5rem .8rem!important;
+        box-shadow:var(--sh-s)!important;
+        font-family:var(--ff-d)!important;
+        font-size:2.2rem!important;
+        font-weight:800!important;
+        line-height:1!important;
+        letter-spacing:-0.03em!important;
+        color:var(--ink)!important;
+        min-height:70px!important;
+        transition:all .25s cubic-bezier(.22,1,.36,1)!important;
+        position:relative;
+        overflow:hidden;
+    }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type .stButton>button::after {
+        content:'';position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--bdr);transition:background .25s;
+    }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover {
+        transform:translateY(-3px)!important;box-shadow:var(--sh-m)!important;
+    }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type .stButton>button:hover::after {
+        background:var(--accent);
+    }
+    /* Color the numbers - target by column position */
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(1) .stButton>button { color:var(--red)!important; }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(2) .stButton>button { color:var(--green)!important; }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(3) .stButton>button { color:var(--accent)!important; }
+    .stMainBlockContainer [data-testid="stHorizontalBlock"]:first-of-type > div:nth-child(4) .stButton>button { color:var(--ink2)!important; }
     </style>""", unsafe_allow_html=True)
 
 def badge_html(t, s="open"):
@@ -253,17 +290,21 @@ def render_sidebar(sb):
 def page_home(sb):
     st.markdown("## Dashboard")
     stats = count_stats(sb)
+    st.markdown('<div class="stat-row">', unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns(4)
     with c1:
-        st.markdown(f'<div class="stat s-red anim d1"><div class="n">{stats["lost_open"]}</div><div class="l">Lost</div></div>', unsafe_allow_html=True)
-        if st.button("View →",key="go_lost",use_container_width=True): nav("Browse Lost"); st.rerun()
+        if st.button(str(stats["lost_open"]),key="go_lost",use_container_width=True): nav("Browse Lost"); st.rerun()
+        st.markdown('<div class="statlbl statlbl-red">LOST</div>', unsafe_allow_html=True)
     with c2:
-        st.markdown(f'<div class="stat s-grn anim d2"><div class="n">{stats["found_open"]}</div><div class="l">Found</div></div>', unsafe_allow_html=True)
-        if st.button("View →",key="go_found",use_container_width=True): nav("Browse Found"); st.rerun()
+        if st.button(str(stats["found_open"]),key="go_found",use_container_width=True): nav("Browse Found"); st.rerun()
+        st.markdown('<div class="statlbl statlbl-grn">FOUND</div>', unsafe_allow_html=True)
     with c3:
-        st.markdown(f'<div class="stat s-acc anim d3"><div class="n">{stats["lost_open"]+stats["found_open"]}</div><div class="l">Active</div></div>', unsafe_allow_html=True)
+        st.button(str(stats["lost_open"]+stats["found_open"]),key="stat_active",use_container_width=True)
+        st.markdown('<div class="statlbl statlbl-acc">ACTIVE</div>', unsafe_allow_html=True)
     with c4:
-        st.markdown(f'<div class="stat s-mut anim d4"><div class="n">{stats["lost_resolved"]+stats["found_resolved"]}</div><div class="l">Reunited</div></div>', unsafe_allow_html=True)
+        st.button(str(stats["lost_resolved"]+stats["found_resolved"]),key="stat_reunited",use_container_width=True)
+        st.markdown('<div class="statlbl statlbl-mut">REUNITED</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     st.markdown(""); st.markdown("")
     cl,cr = st.columns(2, gap="medium")
     with cl:
