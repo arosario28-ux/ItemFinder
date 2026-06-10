@@ -64,8 +64,12 @@ def delete_item(sb, iid):
     if row and row.get("photo_id"): delete_photo(sb, row["photo_id"])
     sb.table("items").delete().eq("id", iid).execute()
 def send_to_auction(sb, iid):
+    row = get_item(sb, iid)
+    if not row or row.get("item_type") != "found" or row.get("status") != "open" or is_in_auction(row) or has_open_match(sb, row):
+        return False
     old = (datetime.now() - timedelta(weeks=AUCTION_WEEKS + 1)).isoformat(timespec="seconds")
     sb.table("items").update({"date_posted": old}).eq("id", iid).execute()
+    return True
 def is_in_auction(row):
     try:
         posted = datetime.fromisoformat(row["date_posted"])
@@ -78,6 +82,8 @@ def get_potential_matches(sb, item):
         for w in [x for x in item["title"].lower().split() if len(x)>3][:4]:
             matches.extend(sb.table("items").select("*").eq("item_type",opp).eq("status","open").or_(f"title.ilike.%{w}%,description.ilike.%{w}%").order("date_posted",desc=True).limit(5).execute().data)
     seen=set(); return [m for m in matches if m["id"] not in seen and not seen.add(m["id"])][:8]
+def has_open_match(sb, item):
+    return len(get_potential_matches(sb, item)) > 0
 def count_stats(sb):
     s={}
     for t in ("lost","found"):
@@ -85,7 +91,8 @@ def count_stats(sb):
     return s
 def get_auction_items(sb):
     cutoff = (datetime.now() - timedelta(weeks=AUCTION_WEEKS)).isoformat()
-    return sb.table("items").select("*").eq("status","open").lte("date_posted", cutoff).order("date_posted").execute().data
+    rows = sb.table("items").select("*").eq("item_type","found").eq("status","open").lte("date_posted", cutoff).order("date_posted").execute().data
+    return [r for r in rows if not has_open_match(sb, r)]
 def place_bid(sb, item_id, email):
     sb.table("auction_bids").insert({"id":uuid.uuid4().hex[:12],"item_id":item_id,"email":email.strip().lower(),"created_at":datetime.now().isoformat(timespec="seconds")}).execute()
 def get_bids(sb, item_id): return sb.table("auction_bids").select("*").eq("item_id",item_id).order("created_at").execute().data
@@ -117,9 +124,9 @@ def auction_timer_html(row):
         deadline = posted + timedelta(weeks=AUCTION_WEEKS)
         remain = deadline - datetime.now()
         if remain.total_seconds() <= 0:
-            return '<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:.4rem .7rem;font-size:.78rem;color:#e65100;font-weight:600;margin-bottom:.5rem">🔨 IN CHARITY AUCTION</div>'
+            return '<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:8px;padding:.4rem .7rem;font-size:.78rem;color:#e65100;font-weight:600;margin-bottom:.5rem">IN CHARITY AUCTION</div>'
         d = remain.days; h = remain.seconds // 3600
-        return f'<div style="background:#f3f0ea;border:1px solid #e8e4dc;border-radius:8px;padding:.4rem .7rem;font-size:.78rem;color:#6b6b80;font-weight:500;margin-bottom:.5rem">⏱ Moves to auction in: <b style="color:#1a1a2e">{d}d {h}h</b></div>'
+        return f'<div style="background:#f3f0ea;border:1px solid #e8e4dc;border-radius:8px;padding:.4rem .7rem;font-size:.78rem;color:#6b6b80;font-weight:500;margin-bottom:.5rem">Moves to auction in: <b style="color:#1a1a2e">{d}d {h}h</b></div>'
     except: return ""
 
 def apply_styles():
@@ -218,7 +225,7 @@ def badge_html(t, s="open"):
 
 def card_html(row, i=0, sb=None):
     d = f" · {row['date_occurred']}" if row.get("date_occurred") else ""
-    loc = f" · 📍 {row['location']}" if row.get("location") else ""
+    loc = f" · {row['location']}" if row.get("location") else ""
     cat = f" · {row['category']}" if row.get("category") else ""
     cc = "c-lost" if row["item_type"]=="lost" else "c-found"
     dc = f"d{min(i+1,4)}"
@@ -237,19 +244,19 @@ def show_photo(sb, pid, **kw):
     if pid:
         url = get_photo_url(sb, pid)
         if url: st.image(url, **kw); return
-    st.markdown('<div class="ph-empty">📷</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ph-empty">No Photo</div>', unsafe_allow_html=True)
 
 def page_landing(sb):
     st.markdown('<div class="hero"><h1>Lost & <span class="hi">Found</span> Hub</h1><div class="sub">Reuniting people with what matters</div></div>', unsafe_allow_html=True)
     c1,c2 = st.columns(2, gap="large")
     with c1:
-        st.markdown('<div class="lcard anim d1"><span class="ico">👤</span><h3>Guest Access</h3><p>Browse and post items freely.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="lcard anim d1"><h3>Guest Access</h3><p>Browse and post items freely.</p></div>', unsafe_allow_html=True)
         if st.button("Continue as Guest", use_container_width=True, type="secondary"): st.session_state["auth_role"]="guest"; st.session_state["page"]="Home"; st.rerun()
     with c2:
-        st.markdown('<div class="lcard anim d2"><span class="ico">🔐</span><h3>Dev Login</h3><p>Manage the board and auctions.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="lcard anim d2"><h3>Dev Login</h3><p>Manage the board and auctions.</p></div>', unsafe_allow_html=True)
         if st.button("Log in with Email", use_container_width=True, type="primary"): st.session_state["show_login"]=True; st.rerun()
     if st.session_state.get("show_login"):
-        st.markdown("---"); st.markdown("### 🔐 Dev Login")
+        st.markdown("---"); st.markdown("### Dev Login")
         has = dev_count(sb)>0
         if has:
             with st.form("login"):
@@ -275,12 +282,12 @@ def render_sidebar(sb):
     else: st.sidebar.markdown('<span class="rbadge rb-guest">Guest</span>', unsafe_allow_html=True)
     st.sidebar.markdown("---")
     cur = st.session_state.get("page","Home")
-    for icon,name in [("🏠","Home"),("🔴","Report Lost"),("🟢","Report Found"),("📋","Browse Lost"),("📋","Browse Found"),("🔨","Charity Auction")]:
-        st.sidebar.button(f"{icon}  {name}",key=f"n_{name}",on_click=nav,args=(name,),use_container_width=True,type="primary" if cur==name else "secondary")
+    for icon,name in [("🏠","Home"),("","Report Lost"),("","Report Found"),("","Browse Lost"),("","Browse Found"),("","Charity Auction")]:
+        st.sidebar.button(f"{icon}  {name}" if icon else name,key=f"n_{name}",on_click=nav,args=(name,),use_container_width=True,type="primary" if cur==name else "secondary")
     st.sidebar.markdown("---")
-    if st.sidebar.button("🚪  Log Out",use_container_width=True): logout(); st.rerun()
+    if st.sidebar.button("Log Out",use_container_width=True): logout(); st.rerun()
     if is_dev():
-        st.sidebar.markdown("---"); st.sidebar.markdown("##### 🛠 Dev Tools")
+        st.sidebar.markdown("---"); st.sidebar.markdown("##### Dev Tools")
         ne=st.sidebar.text_input("Add dev email",key="add_dev_email",placeholder="email@example.com",label_visibility="collapsed")
         if st.sidebar.button("Add Dev",key="btn_add"):
             if ne.strip() and "@" in ne:
@@ -308,7 +315,7 @@ def page_home(sb):
     st.markdown(""); st.markdown("")
     cl,cr = st.columns(2, gap="medium")
     with cl:
-        st.markdown('<div class="sec">🔴 Recently Lost</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec">Recently Lost</div>', unsafe_allow_html=True)
         lost = search_items(sb,"lost")[:5]
         if lost:
             for i,row in enumerate(lost):
@@ -316,7 +323,7 @@ def page_home(sb):
                 st.button("View →",key=f"hl_{row['id']}",on_click=go_detail,args=(row["id"],))
         else: st.info("No lost items yet.")
     with cr:
-        st.markdown('<div class="sec">🟢 Recently Found</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec">Recently Found</div>', unsafe_allow_html=True)
         found = search_items(sb,"found")[:5]
         if found:
             for i,row in enumerate(found):
@@ -325,9 +332,9 @@ def page_home(sb):
         else: st.info("No found items yet.")
 
 def page_post(sb, item_type):
-    verb="Lost" if item_type=="lost" else "Found"; emoji="🔴" if item_type=="lost" else "🟢"
+    verb="Lost" if item_type=="lost" else "Found"
     breadcrumb(("Home","Home"),(f"Report {verb}",None))
-    st.markdown(f"## {emoji} Report a {verb} Item")
+    st.markdown(f"## Report a {verb} Item")
     if item_type=="found":
         match_existing = st.toggle("I found an already posted lost item",value=False)
         if match_existing:
@@ -339,9 +346,18 @@ def page_post(sb, item_type):
                 chosen = get_item(sb, opts[sel])
                 if chosen:
                     st.markdown(card_html(chosen,sb=sb), unsafe_allow_html=True)
-                    if st.button("✅  Mark this item as found / reunited",type="primary",use_container_width=True):
-                        resolve_item(sb,chosen["id"]); notify_devs(sb,{**chosen,"item_type":"found","title":f"RESOLVED: {chosen['title']}"})
-                        st.success(f"'{chosen['title']}' marked as reunited!"); st.balloons()
+                    if is_dev():
+                        if st.button("Mark this item as found / reunited",type="primary",use_container_width=True):
+                            resolve_item(sb,chosen["id"]); notify_devs(sb,{**chosen,"item_type":"found","title":f"RESOLVED: {chosen['title']}"})
+                            st.success(f"'{chosen['title']}' marked as reunited!"); st.balloons()
+                    else:
+                        guest_name = st.text_input("Your name *", key=f"guest_match_name_{chosen['id']}")
+                        if st.button("Post this as recently found",type="primary",use_container_width=True):
+                            if not guest_name.strip():
+                                st.error("Please enter your name.")
+                            else:
+                                d=dict(item_type="found",title=chosen["title"].strip(),description=f"Potential match for lost item '{chosen['title']}' (ID: {chosen['id']}).",category=chosen.get("category","Other"),location=(chosen.get("location") or "").strip(),date_occurred=str(date.today()),contact_name=guest_name.strip(),contact_email="",contact_phone="",photo_id=None)
+                                iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Posted in recently found! ID: {iid}"); st.balloons()
             return
     with st.form(f"post_{item_type}",clear_on_submit=True):
         title=st.text_input("Item title *",placeholder="e.g. Black leather wallet")
@@ -356,7 +372,7 @@ def page_post(sb, item_type):
         with cc1: cn=st.text_input("Name")
         with cc2: ce=st.text_input("Email")
         with cc3: cp=st.text_input("Phone")
-        submitted=st.form_submit_button(f"📌  Post {verb} Item",use_container_width=True)
+        submitted=st.form_submit_button(f"Post {verb} Item",use_container_width=True)
     if submitted:
         if not title.strip(): st.error("Please enter a title."); return
         pid=save_photo(sb,photo)
@@ -364,9 +380,9 @@ def page_post(sb, item_type):
         iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Posted! ID: {iid}"); st.balloons()
 
 def page_browse(sb, item_type):
-    verb="Lost" if item_type=="lost" else "Found"; emoji="🔴" if item_type=="lost" else "🟢"
+    verb="Lost" if item_type=="lost" else "Found"
     breadcrumb(("Home","Home"),(f"Browse {verb}",None))
-    st.markdown(f"## {emoji} Browse {verb} Items")
+    st.markdown(f"## Browse {verb} Items")
     c1,c2,c3,c4=st.columns([3,2,2,2])
     with c1: q=st.text_input("Search",placeholder="Keyword or location...",label_visibility="collapsed")
     with c2: cat=st.selectbox("Category",["All"]+CATEGORIES,label_visibility="collapsed")
@@ -412,15 +428,17 @@ def page_detail(sb):
         c1,c2,c3,_=st.columns([1,1,1,2])
         with c1:
             if row["status"]=="open":
-                if st.button("✅ Resolve"): resolve_item(sb,iid); st.rerun()
+                if st.button("Resolve"): resolve_item(sb,iid); st.rerun()
             else:
-                if st.button("🔄 Reopen"): reopen_item(sb,iid); st.rerun()
+                if st.button("Reopen"): reopen_item(sb,iid); st.rerun()
         with c2:
-            if row["status"]=="open" and not is_in_auction(row):
-                if st.button("🔨 Send to Auction"): send_to_auction(sb,iid); st.success("Sent to charity auction!"); st.rerun()
+            if row["status"]=="open" and row["item_type"]=="found" and not is_in_auction(row) and not has_open_match(sb, row):
+                if st.button("Send to Auction"):
+                    if send_to_auction(sb,iid): st.success("Sent to charity auction!"); st.rerun()
+                    else: st.warning("This item is not eligible for auction.")
         with c3:
-            if st.button("🗑️ Delete"): delete_item(sb,iid); nav("Home"); st.rerun()
-    else: st.caption("🔒 Only devs can manage item status.")
+            if st.button("Delete"): delete_item(sb,iid); nav("Home"); st.rerun()
+    else: st.caption("Only devs can manage item status.")
     matches=get_potential_matches(sb,row)
     if matches:
         st.markdown("### Potential Matches")
@@ -430,7 +448,7 @@ def page_detail(sb):
 
 def page_auction(sb):
     breadcrumb(("Home","Home"),("Charity Auction",None))
-    st.markdown("## 🔨 Charity Auction House")
+    st.markdown("## Charity Auction House")
     st.info("**How it works:** Items unclaimed for 4 weeks enter a silent charity auction. All proceeds go to charity. Enter your email to place a bid. The winner of each auction will be decided at the **end of the school year**. One bid per person per item.")
     st.markdown("---")
     items = get_auction_items(sb)
@@ -444,7 +462,7 @@ def page_auction(sb):
         st.caption(f"{len(bids)} bid{'s' if len(bids)!=1 else ''} placed")
         with st.form(f"bid_{row['id']}"):
             email = st.text_input("Your email to place a bid", placeholder="you@example.com", key=f"bid_email_{row['id']}")
-            go = st.form_submit_button("🔨 Place Bid", use_container_width=True)
+            go = st.form_submit_button("Place Bid", use_container_width=True)
         if go:
             if not email.strip() or "@" not in email: st.error("Enter a valid email.")
             elif has_bid(sb, row["id"], email): st.warning("You already placed a bid on this item.")
@@ -452,7 +470,7 @@ def page_auction(sb):
         st.markdown("---")
 
 def main():
-    st.set_page_config(page_title="Lost & Found Hub",page_icon="🔎",layout="centered")
+    st.set_page_config(page_title="Lost & Found Hub",layout="centered")
     apply_styles(); sb=get_supabase()
     if not is_logged_in(): page_landing(sb); return
     if "page" not in st.session_state: st.session_state["page"]="Home"
