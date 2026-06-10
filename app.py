@@ -3,6 +3,9 @@ Lost & Found Hub — Streamlit + Supabase community board.
 """
 
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import streamlit as st
 import uuid
 from datetime import datetime, date, timedelta
@@ -16,6 +19,8 @@ except ImportError:
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL") or st.secrets.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY") or st.secrets.get("SUPABASE_KEY", "")
+SMTP_EMAIL = os.environ.get("SMTP_EMAIL") or st.secrets.get("SMTP_EMAIL", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD") or st.secrets.get("SMTP_PASSWORD", "")
 
 CATEGORIES = [
     "Electronics", "Wallet / Purse", "Keys", "Clothing",
@@ -27,7 +32,7 @@ CATEGORIES = [
 @st.cache_resource
 def get_supabase() -> Client:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.error("Missing Supabase credentials. Set SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets.")
+        st.error("Missing Supabase credentials.")
         st.stop()
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -133,6 +138,38 @@ def count_stats(sb):
     return s
 
 
+def notify_devs(sb, item_data):
+    if not SMTP_EMAIL or not SMTP_PASSWORD: return
+    dev_emails = get_dev_emails(sb)
+    if not dev_emails: return
+    verb = "Lost" if item_data["item_type"] == "lost" else "Found"
+    subject = f"[Lost & Found] New {verb} Item: {item_data['title']}"
+    body = f"""A new {verb.lower()} item has been posted to Lost & Found Hub.
+
+Title: {item_data['title']}
+Category: {item_data['category']}
+Last seen at: {item_data['location']}
+Date: {item_data['date_occurred']}
+Description: {item_data['description'] or '(none)'}
+
+Contact: {item_data['contact_name'] or '-'} / {item_data['contact_email'] or '-'} / {item_data['contact_phone'] or '-'}
+"""
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(SMTP_EMAIL, SMTP_PASSWORD)
+        for addr in dev_emails:
+            msg = MIMEMultipart()
+            msg["From"] = SMTP_EMAIL
+            msg["To"] = addr
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain"))
+            server.sendmail(SMTP_EMAIL, addr, msg.as_string())
+        server.quit()
+    except Exception:
+        pass
+
+
 def nav(page, **kw):
     st.session_state["page"] = page
     for k, v in kw.items(): st.session_state[k] = v
@@ -146,244 +183,104 @@ def apply_styles():
     @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&display=swap');
 
     :root {
-        --cream:       #faf8f4;
-        --warm:        #f3f0ea;
-        --surface:     #ffffff;
-        --ink:         #1a1a2e;
-        --ink2:        #6b6b80;
-        --ink3:        #a0a0b0;
-        --accent:      #e8532b;
-        --red:         #c0392b;
-        --red-bg:      #fef2f2;
-        --green:       #1a7a4c;
-        --green-bg:    #ecfdf5;
-        --bdr:         #e8e4dc;
-        --sh-s:        0 1px 3px rgba(26,26,46,.06);
-        --sh-m:        0 4px 20px rgba(26,26,46,.08);
-        --sh-l:        0 12px 40px rgba(26,26,46,.12);
-        --r:           14px;
-        --rs:          8px;
-        --ff-d:        'Playfair Display', Georgia, serif;
-        --ff-b:        'DM Sans', system-ui, sans-serif;
+        --cream: #faf8f4; --warm: #f3f0ea; --surface: #ffffff;
+        --ink: #1a1a2e; --ink2: #6b6b80; --ink3: #a0a0b0;
+        --accent: #e8532b; --red: #c0392b; --red-bg: #fef2f2;
+        --green: #1a7a4c; --green-bg: #ecfdf5; --bdr: #e8e4dc;
+        --sh-s: 0 1px 3px rgba(26,26,46,.06);
+        --sh-m: 0 4px 20px rgba(26,26,46,.08);
+        --sh-l: 0 12px 40px rgba(26,26,46,.12);
+        --r: 14px; --rs: 8px;
+        --ff-d: 'Playfair Display', Georgia, serif;
+        --ff-b: 'DM Sans', system-ui, sans-serif;
     }
 
-    .stApp {
-        background: var(--cream) !important;
-        font-family: var(--ff-b) !important;
+    .stApp { background: var(--cream) !important; font-family: var(--ff-b) !important; }
+    .block-container { max-width: 960px !important; padding-top: 2rem !important; }
+
+    h1,h2,h3,.stMarkdown h1,.stMarkdown h2,.stMarkdown h3 {
+        font-family: var(--ff-d) !important; color: var(--ink) !important;
+        font-weight: 700 !important; letter-spacing: -0.02em !important;
     }
-    .block-container {
-        max-width: 960px !important;
-        padding-top: 2rem !important;
+    p,li,label,.stMarkdown p { font-family: var(--ff-b) !important; }
+
+    section[data-testid="stSidebar"] { background: var(--ink) !important; }
+    section[data-testid="stSidebar"] h1,section[data-testid="stSidebar"] h5 { color:#fff !important; font-family:var(--ff-d) !important; }
+    section[data-testid="stSidebar"] p,section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label,section[data-testid="stSidebar"] .stMarkdown p,
+    section[data-testid="stSidebar"] .stCaption p { color:#b0b0c0 !important; }
+    section[data-testid="stSidebar"] .stButton>button {
+        background:transparent !important; color:#c4c4d4 !important;
+        border:1px solid rgba(255,255,255,.08) !important; border-radius:var(--rs) !important;
+        text-align:left !important; font-family:var(--ff-b) !important;
+        font-weight:500 !important; padding:.55rem .9rem !important; transition:all .2s ease !important;
+    }
+    section[data-testid="stSidebar"] .stButton>button:hover {
+        background:rgba(255,255,255,.07) !important; color:#fff !important; transform:translateX(3px);
+    }
+    section[data-testid="stSidebar"] .stButton>button[kind="primary"] {
+        background:var(--accent) !important; color:#fff !important; border-color:var(--accent) !important;
     }
 
-    h1, h2, h3, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
-        font-family: var(--ff-d) !important;
-        color: var(--ink) !important;
-        font-weight: 700 !important;
-        letter-spacing: -0.02em !important;
-    }
-    p, li, label, .stMarkdown p {
-        font-family: var(--ff-b) !important;
-    }
-
-    section[data-testid="stSidebar"] {
-        background: var(--ink) !important;
-    }
-    section[data-testid="stSidebar"] h1,
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] h5 {
-        color: #fff !important;
-        font-family: var(--ff-d) !important;
-    }
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] .stMarkdown p,
-    section[data-testid="stSidebar"] .stCaption p {
-        color: #b0b0c0 !important;
-    }
-    section[data-testid="stSidebar"] .stButton > button {
-        background: transparent !important;
-        color: #c4c4d4 !important;
-        border: 1px solid rgba(255,255,255,.08) !important;
-        border-radius: var(--rs) !important;
-        text-align: left !important;
-        font-family: var(--ff-b) !important;
-        font-weight: 500 !important;
-        padding: .55rem .9rem !important;
-        transition: all .2s ease !important;
-    }
-    section[data-testid="stSidebar"] .stButton > button:hover {
-        background: rgba(255,255,255,.07) !important;
-        color: #fff !important;
-        transform: translateX(3px);
-    }
-    section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
-        background: var(--accent) !important;
-        color: #fff !important;
-        border-color: var(--accent) !important;
-    }
-
-    @keyframes fadeUp {
-        from { opacity: 0; transform: translateY(16px); }
-        to   { opacity: 1; transform: translateY(0); }
-    }
-    .anim { animation: fadeUp .45s cubic-bezier(.22,1,.36,1) both; }
-    .d1 { animation-delay: 0s; }
-    .d2 { animation-delay: .07s; }
-    .d3 { animation-delay: .14s; }
-    .d4 { animation-delay: .21s; }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
+    .anim { animation:fadeUp .45s cubic-bezier(.22,1,.36,1) both; }
+    .d1{animation-delay:0s} .d2{animation-delay:.07s} .d3{animation-delay:.14s} .d4{animation-delay:.21s}
 
     .stat {
-        background: var(--surface);
-        border: 1px solid var(--bdr);
-        border-radius: var(--r);
-        padding: 1.2rem .8rem;
-        text-align: center;
-        box-shadow: var(--sh-s);
-        transition: all .25s cubic-bezier(.22,1,.36,1);
-        overflow: hidden;
-        position: relative;
+        background:var(--surface); border:1px solid var(--bdr); border-radius:var(--r);
+        padding:1.2rem .8rem; text-align:center; box-shadow:var(--sh-s);
+        transition:all .25s cubic-bezier(.22,1,.36,1); overflow:hidden; position:relative;
+        cursor:pointer;
     }
-    .stat::after {
-        content: ''; position: absolute; bottom: 0; left: 0; right: 0;
-        height: 3px; background: var(--bdr); transition: background .25s;
-    }
-    .stat:hover { transform: translateY(-3px); box-shadow: var(--sh-m); }
-    .stat:hover::after { background: var(--accent); }
-    .stat .n {
-        font-family: var(--ff-d); font-size: 2.2rem; font-weight: 800;
-        line-height: 1; letter-spacing: -0.03em;
-    }
-    .stat .l {
-        font-size: .72rem; font-weight: 600; color: var(--ink2);
-        margin-top: .3rem; text-transform: uppercase; letter-spacing: .08em;
-    }
-    .s-red .n  { color: var(--red); }
-    .s-grn .n  { color: var(--green); }
-    .s-acc .n  { color: var(--accent); }
-    .s-mut .n  { color: var(--ink2); }
+    .stat::after { content:''; position:absolute; bottom:0; left:0; right:0; height:3px; background:var(--bdr); transition:background .25s; }
+    .stat:hover { transform:translateY(-3px); box-shadow:var(--sh-m); }
+    .stat:hover::after { background:var(--accent); }
+    .stat .n { font-family:var(--ff-d); font-size:2.2rem; font-weight:800; line-height:1; letter-spacing:-0.03em; }
+    .stat .l { font-size:.72rem; font-weight:600; color:var(--ink2); margin-top:.3rem; text-transform:uppercase; letter-spacing:.08em; }
+    .s-red .n{color:var(--red)} .s-grn .n{color:var(--green)} .s-acc .n{color:var(--accent)} .s-mut .n{color:var(--ink2)}
 
     .card {
-        background: var(--surface);
-        border: 1px solid var(--bdr);
-        border-radius: var(--r);
-        padding: 1rem 1.2rem;
-        margin-bottom: .6rem;
-        box-shadow: var(--sh-s);
-        transition: all .2s cubic-bezier(.22,1,.36,1);
-        border-left: 4px solid var(--bdr);
+        background:var(--surface); border:1px solid var(--bdr); border-radius:var(--r);
+        padding:1rem 1.2rem; margin-bottom:.6rem; box-shadow:var(--sh-s);
+        transition:all .2s cubic-bezier(.22,1,.36,1); border-left:4px solid var(--bdr);
     }
-    .card.c-lost { border-left-color: var(--red); }
-    .card.c-found { border-left-color: var(--green); }
-    .card:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--sh-m);
-    }
-    .card h4 {
-        margin: .3rem 0 .2rem;
-        font-family: var(--ff-d) !important;
-        font-size: 1rem; font-weight: 600;
-        color: var(--ink);
-    }
-    .card .meta { font-size: .78rem; color: var(--ink2); }
+    .card.c-lost{border-left-color:var(--red)} .card.c-found{border-left-color:var(--green)}
+    .card:hover { transform:translateY(-2px); box-shadow:var(--sh-m); }
+    .card h4 { margin:.3rem 0 .2rem; font-family:var(--ff-d) !important; font-size:1rem; font-weight:600; color:var(--ink); }
+    .card .meta { font-size:.78rem; color:var(--ink2); }
 
-    .badge {
-        display: inline-block; padding: .15rem .6rem; border-radius: 20px;
-        font-size: .65rem; font-weight: 600; font-family: var(--ff-b);
-        text-transform: uppercase; letter-spacing: .06em;
-    }
-    .b-lost { background: var(--red-bg); color: var(--red); }
-    .b-found { background: var(--green-bg); color: var(--green); }
-    .b-resolved { background: #f1f1f1; color: var(--ink2); }
+    .badge { display:inline-block; padding:.15rem .6rem; border-radius:20px; font-size:.65rem; font-weight:600; font-family:var(--ff-b); text-transform:uppercase; letter-spacing:.06em; }
+    .b-lost{background:var(--red-bg);color:var(--red)} .b-found{background:var(--green-bg);color:var(--green)} .b-resolved{background:#f1f1f1;color:var(--ink2)}
 
-    .sec {
-        font-family: var(--ff-d); font-size: 1.05rem; font-weight: 700;
-        color: var(--ink); border-bottom: 2px solid var(--bdr);
-        padding-bottom: .4rem; margin-bottom: .8rem;
-    }
+    .sec { font-family:var(--ff-d); font-size:1.05rem; font-weight:700; color:var(--ink); border-bottom:2px solid var(--bdr); padding-bottom:.4rem; margin-bottom:.8rem; }
+    .bc { font-size:.8rem; color:var(--ink2); margin-bottom:.5rem; }
+    .bc b{color:var(--ink)} .bc .sep{margin:0 .35rem;color:var(--ink3)}
 
-    .bc { font-size: .8rem; color: var(--ink2); margin-bottom: .5rem; }
-    .bc b { color: var(--ink); }
-    .bc .sep { margin: 0 .35rem; color: var(--ink3); }
+    .hero{text-align:center;padding:3.5rem 1rem 2rem}
+    .hero h1{font-family:var(--ff-d)!important;font-size:3rem!important;font-weight:800!important;letter-spacing:-0.03em!important;color:var(--ink)!important;line-height:1.1}
+    .hero .hi{color:var(--accent)}
+    .hero .sub{font-size:1.1rem;color:var(--ink2);margin-top:.5rem;margin-bottom:2rem}
+    .lcard{background:var(--surface);border:2px solid var(--bdr);border-radius:18px;padding:2rem 1.5rem;text-align:center;transition:all .3s cubic-bezier(.22,1,.36,1);overflow:hidden;position:relative}
+    .lcard::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--accent),#f5a623);opacity:0;transition:opacity .3s}
+    .lcard:hover{border-color:var(--accent);box-shadow:var(--sh-l);transform:translateY(-4px)}
+    .lcard:hover::before{opacity:1}
+    .lcard .ico{font-size:2.5rem;display:block;margin-bottom:.5rem}
+    .lcard h3{font-family:var(--ff-d)!important;font-size:1.25rem!important;color:var(--ink)!important;margin:.2rem 0!important}
+    .lcard p{font-size:.85rem;color:var(--ink2);line-height:1.5;margin-bottom:1rem}
 
-    .hero { text-align: center; padding: 3.5rem 1rem 2rem; }
-    .hero h1 {
-        font-family: var(--ff-d) !important; font-size: 3rem !important;
-        font-weight: 800 !important; letter-spacing: -0.03em !important;
-        color: var(--ink) !important; line-height: 1.1;
-    }
-    .hero .hi { color: var(--accent); }
-    .hero .sub {
-        font-size: 1.1rem; color: var(--ink2);
-        margin-top: .5rem; margin-bottom: 2rem;
-    }
-    .lcard {
-        background: var(--surface); border: 2px solid var(--bdr);
-        border-radius: 18px; padding: 2rem 1.5rem; text-align: center;
-        transition: all .3s cubic-bezier(.22,1,.36,1);
-        overflow: hidden; position: relative;
-    }
-    .lcard::before {
-        content: ''; position: absolute; top: 0; left: 0; right: 0;
-        height: 3px; background: linear-gradient(90deg, var(--accent), #f5a623);
-        opacity: 0; transition: opacity .3s;
-    }
-    .lcard:hover {
-        border-color: var(--accent); box-shadow: var(--sh-l);
-        transform: translateY(-4px);
-    }
-    .lcard:hover::before { opacity: 1; }
-    .lcard .ico { font-size: 2.5rem; display: block; margin-bottom: .5rem; }
-    .lcard h3 {
-        font-family: var(--ff-d) !important; font-size: 1.25rem !important;
-        color: var(--ink) !important; margin: .2rem 0 !important;
-    }
-    .lcard p { font-size: .85rem; color: var(--ink2); line-height: 1.5; margin-bottom: 1rem; }
+    .rbadge{display:inline-block;padding:.18rem .6rem;border-radius:20px;font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+    .rb-dev{background:rgba(232,83,43,.18);color:#ff6b4a} .rb-guest{background:rgba(255,255,255,.08);color:#999}
 
-    .rbadge {
-        display: inline-block; padding: .18rem .6rem; border-radius: 20px;
-        font-size: .68rem; font-weight: 600; text-transform: uppercase;
-        letter-spacing: .05em;
-    }
-    .rb-dev { background: rgba(232,83,43,.18); color: #ff6b4a; }
-    .rb-guest { background: rgba(255,255,255,.08); color: #999; }
+    .stMainBlockContainer .stButton>button{font-family:var(--ff-b)!important;font-weight:600!important;border-radius:var(--rs)!important;transition:all .2s cubic-bezier(.22,1,.36,1)!important}
+    .stMainBlockContainer .stButton>button:hover{transform:translateY(-1px)!important}
+    .stMainBlockContainer .stButton>button[kind="primary"]{background:var(--accent)!important;border-color:var(--accent)!important;color:#fff!important}
 
-    .stMainBlockContainer .stButton > button {
-        font-family: var(--ff-b) !important; font-weight: 600 !important;
-        border-radius: var(--rs) !important;
-        transition: all .2s cubic-bezier(.22,1,.36,1) !important;
-    }
-    .stMainBlockContainer .stButton > button:hover {
-        transform: translateY(-1px) !important;
-    }
-    .stMainBlockContainer .stButton > button[kind="primary"] {
-        background: var(--accent) !important; border-color: var(--accent) !important;
-        color: #fff !important;
-    }
+    .stTextInput input,.stTextArea textarea,.stSelectbox>div>div{font-family:var(--ff-b)!important;border-radius:var(--rs)!important}
 
-    .stTextInput input, .stTextArea textarea, .stSelectbox > div > div {
-        font-family: var(--ff-b) !important;
-        border-radius: var(--rs) !important;
-    }
-
-    .ph-empty {
-        background: var(--warm); border: 2px dashed var(--bdr);
-        border-radius: var(--r); height: 180px;
-        display: flex; align-items: center; justify-content: center;
-        color: var(--ink3); font-size: 2.2rem;
-    }
-
-    .dtitle {
-        font-family: var(--ff-d); font-size: 1.8rem; font-weight: 700;
-        color: var(--ink); letter-spacing: -0.02em; line-height: 1.2;
-        margin: .4rem 0 .8rem;
-    }
-
-    hr { border-color: var(--bdr) !important; opacity: .4 !important; }
-    ::-webkit-scrollbar { width: 5px; }
-    ::-webkit-scrollbar-thumb { background: var(--bdr); border-radius: 3px; }
+    .ph-empty{background:var(--warm);border:2px dashed var(--bdr);border-radius:var(--r);height:180px;display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:2.2rem}
+    .dtitle{font-family:var(--ff-d);font-size:1.8rem;font-weight:700;color:var(--ink);letter-spacing:-0.02em;line-height:1.2;margin:.4rem 0 .8rem}
+    hr{border-color:var(--bdr)!important;opacity:.4!important}
+    ::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:3px}
     </style>
     """, unsafe_allow_html=True)
 
@@ -414,7 +311,6 @@ def show_photo(sb, pid, **kw):
 
 def page_landing(sb):
     st.markdown('<div class="hero"><h1>Lost & <span class="hi">Found</span> Hub</h1><div class="sub">Reuniting people with what matters</div></div>', unsafe_allow_html=True)
-
     c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown('<div class="lcard anim d1"><span class="ico">👤</span><h3>Guest Access</h3><p>Browse and post items freely. No sign-up needed.</p></div>', unsafe_allow_html=True)
@@ -424,7 +320,6 @@ def page_landing(sb):
         st.markdown('<div class="lcard anim d2"><span class="ico">🔐</span><h3>Dev Login</h3><p>Manage the board: resolve, reopen, and delete items.</p></div>', unsafe_allow_html=True)
         if st.button("Log in with Email", use_container_width=True, type="primary"):
             st.session_state["show_login"] = True; st.rerun()
-
     if st.session_state.get("show_login"):
         st.markdown("---")
         st.markdown("### 🔐 Dev Login")
@@ -463,16 +358,12 @@ def render_sidebar(sb):
         st.sidebar.markdown(f'<span class="rbadge rb-dev">Dev</span> &nbsp; <span style="color:#b0b0c0;font-size:.82rem">{em}</span>', unsafe_allow_html=True)
     else:
         st.sidebar.markdown('<span class="rbadge rb-guest">Guest</span>', unsafe_allow_html=True)
-
     st.sidebar.markdown("---")
     cur = st.session_state.get("page", "Home")
-    pages = [("🏠", "Home"), ("🔴", "Report Lost"), ("🟢", "Report Found"), ("📋", "Browse Lost"), ("📋", "Browse Found")]
-    for icon, name in pages:
+    for icon, name in [("🏠", "Home"), ("🔴", "Report Lost"), ("🟢", "Report Found")]:
         st.sidebar.button(f"{icon}  {name}", key=f"n_{name}", on_click=nav, args=(name,), use_container_width=True, type="primary" if cur == name else "secondary")
-
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪  Log Out", use_container_width=True): logout(); st.rerun()
-
     if is_dev():
         st.sidebar.markdown("---")
         st.sidebar.markdown("##### 🛠 Dev Tools")
@@ -485,13 +376,21 @@ def render_sidebar(sb):
 
 def page_home(sb):
     st.markdown("## Dashboard")
-
     stats = count_stats(sb)
+
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(f'<div class="stat s-red anim d1"><div class="n">{stats["lost_open"]}</div><div class="l">Lost</div></div>', unsafe_allow_html=True)
-    with c2: st.markdown(f'<div class="stat s-grn anim d2"><div class="n">{stats["found_open"]}</div><div class="l">Found</div></div>', unsafe_allow_html=True)
-    with c3: st.markdown(f'<div class="stat s-acc anim d3"><div class="n">{stats["lost_open"]+stats["found_open"]}</div><div class="l">Active</div></div>', unsafe_allow_html=True)
-    with c4: st.markdown(f'<div class="stat s-mut anim d4"><div class="n">{stats["lost_resolved"]+stats["found_resolved"]}</div><div class="l">Reunited</div></div>', unsafe_allow_html=True)
+    with c1:
+        st.markdown(f'<div class="stat s-red anim d1"><div class="n">{stats["lost_open"]}</div><div class="l">Lost</div></div>', unsafe_allow_html=True)
+        if st.button("View lost →", key="stat_lost", use_container_width=True):
+            nav("Browse Lost"); st.rerun()
+    with c2:
+        st.markdown(f'<div class="stat s-grn anim d2"><div class="n">{stats["found_open"]}</div><div class="l">Found</div></div>', unsafe_allow_html=True)
+        if st.button("View found →", key="stat_found", use_container_width=True):
+            nav("Browse Found"); st.rerun()
+    with c3:
+        st.markdown(f'<div class="stat s-acc anim d3"><div class="n">{stats["lost_open"]+stats["found_open"]}</div><div class="l">Active</div></div>', unsafe_allow_html=True)
+    with c4:
+        st.markdown(f'<div class="stat s-mut anim d4"><div class="n">{stats["lost_resolved"]+stats["found_resolved"]}</div><div class="l">Reunited</div></div>', unsafe_allow_html=True)
 
     st.markdown("")
     st.markdown("")
@@ -505,7 +404,6 @@ def page_home(sb):
                 st.markdown(card_html(row, i), unsafe_allow_html=True)
                 st.button("View →", key=f"hl_{row['id']}", on_click=go_detail, args=(row["id"],))
         else: st.info("No lost items yet.")
-
     with col_r:
         st.markdown('<div class="sec">🟢 Recently Found</div>', unsafe_allow_html=True)
         found = search_items(sb, "found")[:5]
@@ -522,6 +420,36 @@ def page_post(sb, item_type):
     breadcrumb(("Home", "Home"), (f"Report {verb}", None))
     st.markdown(f"## {emoji} Report a {verb} Item")
 
+    # ── "Found an already posted item" toggle (only on Report Found) ────────
+    if item_type == "found":
+        match_existing = st.toggle("I found an already posted lost item", value=False)
+
+        if match_existing:
+            open_lost = search_items(sb, "lost")
+            if not open_lost:
+                st.info("No open lost items to match.")
+                return
+
+            options = {f"{r['title']} — {r['category']} — {r['location'] or '?'} ({r['date_occurred']})": r["id"] for r in open_lost}
+            selected = st.selectbox("Select the lost item you found", list(options.keys()))
+
+            if selected:
+                chosen = get_item(sb, options[selected])
+                if chosen:
+                    st.markdown(card_html(chosen), unsafe_allow_html=True)
+
+                    if chosen.get("photo_id"):
+                        url = get_photo_url(sb, chosen["photo_id"])
+                        if url: st.image(url, width=200)
+
+                    if st.button("✅  Mark this item as found / reunited", type="primary", use_container_width=True):
+                        resolve_item(sb, chosen["id"])
+                        notify_devs(sb, {**chosen, "item_type": "found", "title": f"RESOLVED: {chosen['title']}"})
+                        st.success(f"'{chosen['title']}' has been marked as reunited!")
+                        st.balloons()
+            return
+
+    # ── Standard post form ──────────────────────────────────────────────────
     with st.form(f"post_{item_type}", clear_on_submit=True):
         title = st.text_input("Item title *", placeholder="e.g. Black leather wallet")
         description = st.text_area("Description", placeholder="Brand, color, distinguishing features...", height=100)
@@ -529,7 +457,7 @@ def page_post(sb, item_type):
         c1, c2, c3 = st.columns(3)
         with c1: category = st.selectbox("Category", CATEGORIES)
         with c2: date_occurred = st.date_input(f"Date {verb.lower()}", value=date.today(), max_value=date.today())
-        with c3: location = st.text_input("Location", placeholder="e.g. Main Street")
+        with c3: location = st.text_input("Last seen at", placeholder="e.g. Main Street")
 
         photo = st.file_uploader("Photo (optional)", type=["png", "jpg", "jpeg", "webp"])
 
@@ -544,7 +472,9 @@ def page_post(sb, item_type):
     if submitted:
         if not title.strip(): st.error("Please enter a title."); return
         pid = save_photo(sb, photo)
-        iid = insert_item(sb, dict(item_type=item_type, title=title.strip(), description=description.strip(), category=category, location=location.strip(), date_occurred=str(date_occurred), contact_name=contact_name.strip(), contact_email=contact_email.strip(), contact_phone=contact_phone.strip(), photo_id=pid))
+        item_data = dict(item_type=item_type, title=title.strip(), description=description.strip(), category=category, location=location.strip(), date_occurred=str(date_occurred), contact_name=contact_name.strip(), contact_email=contact_email.strip(), contact_phone=contact_phone.strip(), photo_id=pid)
+        iid = insert_item(sb, item_data)
+        notify_devs(sb, item_data)
         st.success(f"Posted! ID: {iid}")
         st.balloons()
 
@@ -564,7 +494,6 @@ def page_browse(sb, item_type):
     dm = {"All time": 0, "7 days": 7, "30 days": 30, "90 days": 90}
     results = search_items(sb, item_type, q, cat, sf, dm[tf])
     st.caption(f"{len(results)} result{'s' if len(results) != 1 else ''}")
-
     if not results: st.info(f"No {verb.lower()} items match."); return
 
     cols = st.columns(2)
@@ -583,17 +512,14 @@ def page_detail(sb):
         st.warning("No item selected.")
         if st.button("← Home"): nav("Home"); st.rerun()
         return
-
     row = get_item(sb, iid)
     if not row:
         st.error("Item not found.")
         if st.button("← Home"): nav("Home"); st.rerun()
         return
-
     verb = "Lost" if row["item_type"] == "lost" else "Found"
-    breadcrumb(("Home", "Home"), (f"Browse {verb}", f"Browse {verb}"), (row["title"], None))
-
-    if st.button(f"← Browse {verb}"): nav(f"Browse {verb}"); st.rerun()
+    breadcrumb(("Home", "Home"), (row["title"], None))
+    if st.button("← Home"): nav("Home"); st.rerun()
 
     st.markdown(f'{badge_html(row["item_type"], row["status"])}', unsafe_allow_html=True)
     st.markdown(f'<div class="dtitle">{row["title"]}</div>', unsafe_allow_html=True)
@@ -603,7 +529,7 @@ def page_detail(sb):
     with cx:
         info = []
         if row.get("category"): info.append(f"**Category:** {row['category']}")
-        if row.get("location"): info.append(f"**Location:** {row['location']}")
+        if row.get("location"): info.append(f"**Last seen at:** {row['location']}")
         if row.get("date_occurred"): info.append(f"**Date:** {row['date_occurred']}")
         info.append(f"**Posted:** {row['date_posted'][:16].replace('T', ' ')}")
         st.markdown("  \n".join(info))
@@ -646,10 +572,8 @@ def main():
     st.set_page_config(page_title="Lost & Found Hub", page_icon="🔎", layout="centered")
     apply_styles()
     sb = get_supabase()
-
     if not is_logged_in(): page_landing(sb); return
     if "page" not in st.session_state: st.session_state["page"] = "Home"
-
     render_sidebar(sb)
     p = st.session_state["page"]
     {"Home": lambda: page_home(sb),
