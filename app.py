@@ -118,6 +118,15 @@ def place_bid(sb, item_id, first_name, last_name, email, bid_amount):
     return False, "Bid submission failed because your Supabase `auction_bids` table schema does not match the app."
 def get_bids(sb, item_id): return sb.table("auction_bids").select("*").eq("item_id",item_id).order("created_at").execute().data
 def has_bid(sb, item_id, email): return len(sb.table("auction_bids").select("id").eq("item_id",item_id).ilike("email",email.strip()).execute().data)>0
+def bidder_name(bid):
+    first = (bid.get("first_name") or "").strip()
+    last = (bid.get("last_name") or "").strip()
+    full = f"{first} {last}".strip()
+    return full or (bid.get("name") or "").strip() or "Unknown bidder"
+def bid_price(bid):
+    amount = bid.get("bid_amount", bid.get("bid"))
+    try: return f"${float(amount):,.2f}"
+    except: return "$0.00"
 
 def notify_devs(sb, item_data):
     if not SMTP_EMAIL or not SMTP_PASSWORD: return
@@ -487,6 +496,17 @@ def page_auction(sb):
         st.markdown(card_html(row,i,sb), unsafe_allow_html=True)
         bids = get_bids(sb, row["id"])
         st.metric("Bids placed", len(bids))
+        if is_dev():
+            toggle_key = f"show_bids_{row['id']}"
+            if st.button("Show Bid Details", key=f"show_bid_details_{row['id']}", use_container_width=True):
+                st.session_state[toggle_key] = not st.session_state.get(toggle_key, False)
+            if st.session_state.get(toggle_key, False):
+                st.markdown("**All bids (dev only):**")
+                if not bids:
+                    st.caption("No bids yet.")
+                for bid in bids:
+                    email = (bid.get("email") or "").strip() or "No email"
+                    st.markdown(f"- {bidder_name(bid)} ({email}) — **{bid_price(bid)}**")
         with st.form(f"bid_{row['id']}"):
             first_name = st.text_input("First name", placeholder="Jane", key=f"bid_first_{row['id']}")
             last_name = st.text_input("Last name", placeholder="Doe", key=f"bid_last_{row['id']}")
