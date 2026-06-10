@@ -233,7 +233,7 @@ def card_html(row, i=0, sb=None):
     if row.get("photo_id") and sb:
         url = get_photo_url(sb, row["photo_id"])
         if url: img = f'<img src="{url}" alt="">'
-    timer = auction_timer_html(row) if row.get("status")=="open" else ""
+    timer = auction_timer_html(row) if row.get("status")=="open" and row.get("item_type")=="found" else ""
     return f'<div class="card {cc} anim {dc}">{timer}{badge_html(row["item_type"],row["status"])}<h4>{row["title"]}</h4><div class="meta">{cat}{loc}{d}</div>{img}</div>'
 
 def breadcrumb(*parts):
@@ -408,7 +408,8 @@ def page_detail(sb):
     if not row: st.error("Item not found."); return
     breadcrumb(("Home","Home"),(row["title"],None))
     if st.button("← Home"): nav("Home"); st.rerun()
-    st.markdown(auction_timer_html(row), unsafe_allow_html=True)
+    if row.get("item_type")=="found" and row.get("status")=="open":
+        st.markdown(auction_timer_html(row), unsafe_allow_html=True)
     st.markdown(f'{badge_html(row["item_type"],row["status"])}', unsafe_allow_html=True)
     st.markdown(f'<div class="dtitle">{row["title"]}</div>', unsafe_allow_html=True)
     ci,cx=st.columns([1,2])
