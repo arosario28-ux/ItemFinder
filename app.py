@@ -370,7 +370,7 @@ def page_post(sb, item_type):
                     if is_dev():
                         if st.button("Mark this item as found / reunited",type="primary",use_container_width=True):
                             resolve_item(sb,chosen["id"]); notify_devs(sb,{**chosen,"item_type":"found","title":f"RESOLVED: {chosen['title']}"})
-                            st.success(f"'{chosen['title']}' marked as reunited!"); st.balloons()
+                            st.success(f"'{chosen['title']}' marked as reunited.")
                     else:
                         st.info("Guests cannot mark items reunited. Submit your name to create a found post while keeping the lost post open.")
                         with st.form(f"guest_match_post_{chosen['id']}"):
@@ -381,7 +381,7 @@ def page_post(sb, item_type):
                                 st.error("Please enter your name.")
                             else:
                                 d=dict(item_type="found",title=chosen["title"].strip(),description=f"Potential match for lost item '{chosen['title']}' (ID: {chosen['id']}). Original lost post remains open for owner confirmation.",category=(chosen.get("category") or "Other"),location=(chosen.get("location") or "").strip(),date_occurred=str(date.today()),contact_name=guest_name.strip(),contact_email="",contact_phone="",photo_id=chosen.get("photo_id"))
-                                iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Found post created! ID: {iid}"); st.balloons()
+                                iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Found post created. ID: {iid}")
             return
     with st.form(f"post_{item_type}",clear_on_submit=True):
         title=st.text_input("Item title *",placeholder="e.g. Black leather wallet")
@@ -401,7 +401,7 @@ def page_post(sb, item_type):
         if not title.strip(): st.error("Please enter a title."); return
         pid=save_photo(sb,photo)
         d=dict(item_type=item_type,title=title.strip(),description=description.strip(),category=category,location=location.strip(),date_occurred=str(date_occurred),contact_name=cn.strip(),contact_email=ce.strip(),contact_phone=cp.strip(),photo_id=pid)
-        iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Posted! ID: {iid}"); st.balloons()
+        iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Posted. ID: {iid}")
 
 def page_browse(sb, item_type):
     verb="Lost" if item_type=="lost" else "Found"
