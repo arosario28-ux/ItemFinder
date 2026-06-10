@@ -351,13 +351,16 @@ def page_post(sb, item_type):
                             resolve_item(sb,chosen["id"]); notify_devs(sb,{**chosen,"item_type":"found","title":f"RESOLVED: {chosen['title']}"})
                             st.success(f"'{chosen['title']}' marked as reunited!"); st.balloons()
                     else:
-                        guest_name = st.text_input("Your name *", key=f"guest_match_name_{chosen['id']}")
-                        if st.button("Post this as recently found",type="primary",use_container_width=True):
+                        st.info("Guests cannot mark items reunited. Submit your name to create a found post while keeping the lost post open.")
+                        with st.form(f"guest_match_post_{chosen['id']}"):
+                            guest_name = st.text_input("Your name *", key=f"guest_match_name_{chosen['id']}")
+                            post_found = st.form_submit_button("Post as Found", type="primary", use_container_width=True)
+                        if post_found:
                             if not guest_name.strip():
                                 st.error("Please enter your name.")
                             else:
-                                d=dict(item_type="found",title=chosen["title"].strip(),description=f"Potential match for lost item '{chosen['title']}' (ID: {chosen['id']}).",category=chosen.get("category","Other"),location=(chosen.get("location") or "").strip(),date_occurred=str(date.today()),contact_name=guest_name.strip(),contact_email="",contact_phone="",photo_id=None)
-                                iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Posted in recently found! ID: {iid}"); st.balloons()
+                                d=dict(item_type="found",title=chosen["title"].strip(),description=f"Potential match for lost item '{chosen['title']}' (ID: {chosen['id']}). Original lost post remains open for owner confirmation.",category=(chosen.get("category") or "Other"),location=(chosen.get("location") or "").strip(),date_occurred=str(date.today()),contact_name=guest_name.strip(),contact_email="",contact_phone="",photo_id=chosen.get("photo_id"))
+                                iid=insert_item(sb,d); notify_devs(sb,d); st.success(f"Found post created! ID: {iid}"); st.balloons()
             return
     with st.form(f"post_{item_type}",clear_on_submit=True):
         title=st.text_input("Item title *",placeholder="e.g. Black leather wallet")
