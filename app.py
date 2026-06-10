@@ -457,9 +457,11 @@ def page_detail(sb):
             else:
                 if st.button("Reopen"): reopen_item(sb,iid); st.rerun()
         with c2:
-            if row["status"]=="open" and row["item_type"]=="found" and not is_in_auction(row) and not has_open_match(sb, row):
-                if st.button("Send to Auction"):
+            if row["status"]=="open" and row["item_type"]=="found":
+                if st.button("Send to Charity Auction"):
                     if send_to_auction(sb,iid): st.success("Sent to charity auction!"); st.rerun()
+                    elif is_in_auction(row): st.info("This item is already in the charity auction.")
+                    elif has_open_match(sb, row): st.warning("This item is not eligible while it has potential owner matches.")
                     else: st.warning("This item is not eligible for auction.")
         with c3:
             if st.button("Delete"): delete_item(sb,iid); nav("Home"); st.rerun()
