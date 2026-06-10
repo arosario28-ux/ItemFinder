@@ -93,8 +93,16 @@ def get_auction_items(sb):
     cutoff = (datetime.now() - timedelta(weeks=AUCTION_WEEKS)).isoformat()
     rows = sb.table("items").select("*").eq("item_type","found").eq("status","open").lte("date_posted", cutoff).order("date_posted").execute().data
     return [r for r in rows if not has_open_match(sb, r)]
-def place_bid(sb, item_id, email):
-    sb.table("auction_bids").insert({"id":uuid.uuid4().hex[:12],"item_id":item_id,"email":email.strip().lower(),"created_at":datetime.now().isoformat(timespec="seconds")}).execute()
+def place_bid(sb, item_id, first_name, last_name, email, bid_amount):
+    sb.table("auction_bids").insert({
+        "id": uuid.uuid4().hex[:12],
+        "item_id": item_id,
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip(),
+        "email": email.strip().lower(),
+        "bid_amount": float(bid_amount),
+        "created_at": datetime.now().isoformat(timespec="seconds")
+    }).execute()
 def get_bids(sb, item_id): return sb.table("auction_bids").select("*").eq("item_id",item_id).order("created_at").execute().data
 def has_bid(sb, item_id, email): return len(sb.table("auction_bids").select("id").eq("item_id",item_id).ilike("email",email.strip()).execute().data)>0
 
@@ -453,7 +461,7 @@ def page_detail(sb):
 def page_auction(sb):
     breadcrumb(("Home","Home"),("Charity Auction",None))
     st.markdown("## Charity Auction House")
-    st.info("**How it works:** Items unclaimed for 4 weeks enter a silent charity auction. All proceeds go to charity. Enter your email to place a bid. The winner of each auction will be decided at the **end of the school year**. One bid per person per item.")
+    st.info("**How it works:** Items unclaimed for 4 weeks enter a silent charity auction. All proceeds go to charity. Enter your first name, last name, email, and bid amount to place a bid. The winner of each auction will be decided at the **end of the school year**. One bid per person per item.")
     st.markdown("---")
     items = get_auction_items(sb)
     if not items:
@@ -463,14 +471,19 @@ def page_auction(sb):
     for i,row in enumerate(items):
         st.markdown(card_html(row,i,sb), unsafe_allow_html=True)
         bids = get_bids(sb, row["id"])
-        st.caption(f"{len(bids)} bid{'s' if len(bids)!=1 else ''} placed")
+        st.metric("Bids placed", len(bids))
         with st.form(f"bid_{row['id']}"):
-            email = st.text_input("Your email to place a bid", placeholder="you@example.com", key=f"bid_email_{row['id']}")
+            first_name = st.text_input("First name", placeholder="Jane", key=f"bid_first_{row['id']}")
+            last_name = st.text_input("Last name", placeholder="Doe", key=f"bid_last_{row['id']}")
+            email = st.text_input("Email", placeholder="you@example.com", key=f"bid_email_{row['id']}")
+            bid_amount = st.number_input("Bid amount ($)", min_value=0.01, step=1.00, format="%.2f", key=f"bid_amount_{row['id']}")
             go = st.form_submit_button("Place Bid", use_container_width=True)
         if go:
-            if not email.strip() or "@" not in email: st.error("Enter a valid email.")
+            if not first_name.strip() or not last_name.strip(): st.error("Enter your first and last name.")
+            elif not email.strip() or "@" not in email: st.error("Enter a valid email.")
+            elif bid_amount <= 0: st.error("Enter a valid bid amount.")
             elif has_bid(sb, row["id"], email): st.warning("You already placed a bid on this item.")
-            else: place_bid(sb, row["id"], email); st.success("Bid placed! Winner announced at end of school year."); st.rerun()
+            else: place_bid(sb, row["id"], first_name, last_name, email, bid_amount); st.success("Bid placed! Winner announced at end of school year."); st.rerun()
         st.markdown("---")
 
 def main():
