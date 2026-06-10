@@ -94,15 +94,28 @@ def get_auction_items(sb):
     rows = sb.table("items").select("*").eq("item_type","found").eq("status","open").lte("date_posted", cutoff).order("date_posted").execute().data
     return [r for r in rows if not has_open_match(sb, r)]
 def place_bid(sb, item_id, first_name, last_name, email, bid_amount):
-    sb.table("auction_bids").insert({
+    base = {
         "id": uuid.uuid4().hex[:12],
         "item_id": item_id,
-        "first_name": first_name.strip(),
-        "last_name": last_name.strip(),
         "email": email.strip().lower(),
-        "bid_amount": float(bid_amount),
         "created_at": datetime.now().isoformat(timespec="seconds")
-    }).execute()
+    }
+    first_name = first_name.strip()
+    last_name = last_name.strip()
+    amount = float(bid_amount)
+    payloads = [
+        {**base, "first_name": first_name, "last_name": last_name, "bid_amount": amount},
+        {**base, "name": f"{first_name} {last_name}".strip(), "bid_amount": amount},
+        {**base, "first_name": first_name, "last_name": last_name, "bid": amount},
+        {**base, "name": f"{first_name} {last_name}".strip(), "bid": amount},
+    ]
+    for p in payloads:
+        try:
+            sb.table("auction_bids").insert(p).execute()
+            return True, ""
+        except Exception:
+            continue
+    return False, "Bid submission failed because your Supabase `auction_bids` table schema does not match the app."
 def get_bids(sb, item_id): return sb.table("auction_bids").select("*").eq("item_id",item_id).order("created_at").execute().data
 def has_bid(sb, item_id, email): return len(sb.table("auction_bids").select("id").eq("item_id",item_id).ilike("email",email.strip()).execute().data)>0
 
@@ -483,7 +496,13 @@ def page_auction(sb):
             elif not email.strip() or "@" not in email: st.error("Enter a valid email.")
             elif bid_amount <= 0: st.error("Enter a valid bid amount.")
             elif has_bid(sb, row["id"], email): st.warning("You already placed a bid on this item.")
-            else: place_bid(sb, row["id"], first_name, last_name, email, bid_amount); st.success("Bid placed! Winner announced at end of school year."); st.rerun()
+            else:
+                ok, err = place_bid(sb, row["id"], first_name, last_name, email, bid_amount)
+                if ok:
+                    st.success("Bid placed! Winner announced at end of school year.")
+                    st.rerun()
+                else:
+                    st.error(err)
         st.markdown("---")
 
 def main():
